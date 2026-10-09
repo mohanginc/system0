@@ -1,0 +1,22 @@
+{
+  "name": "system0",
+  "version": "0.1.4",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "start": "node server.mjs",
+    "test": "node --test test/*.test.mjs",
+    "installer:build": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File installer/build.ps1",
+    "installer:test": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/installer.test.ps1"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "fflate": "^0.8.3",
+    "multer": "^2.4.0",
+    "openai": "^7.28.0",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"
+  }
+}

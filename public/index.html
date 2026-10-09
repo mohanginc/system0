@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>주문 상품명 정리 · system0</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/brand-star.svg">
+  <link rel="stylesheet" href="/styles.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="header">
+    <a class="brand" href="/" aria-label="system0 홈"><img class="brand-mark" src="/assets/brand-star.svg" alt="베이비스텔라 별 로고" width="34" height="56"> system0 <span class="brand-caption">주문 업무</span></a>
+    <div class="history"><label for="batch-date">지난 작업</label><input id="batch-date" type="date" aria-label="지난 작업 날짜"><select id="batch-select" aria-label="선택한 날짜의 작업"><option value="">저장된 작업 없음</option></select><button id="new-batch-button">새 작업</button></div>
+  </header>
+  <main>
+    <div id="message" class="message" role="status" hidden></div>
+    <section class="upload-card" aria-labelledby="upload-title">
+      <div class="section-label"><span class="step-label">01</span><div><h2 id="upload-title">주문 파일 불러오기</h2><p>여러 엑셀을 한 작업으로 모읍니다. 원본 주문 행은 모두 보존합니다.</p></div></div>
+      <div class="upload-layout">
+        <label class="dropzone" id="dropzone" for="files">
+          <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4" aria-hidden="true"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M8 13h8M8 17h5"/></svg>
+          <strong>엑셀 파일을 끌어 놓거나 선택하세요</strong><span>.xls, .xlsx · 여러 파일 선택 가능</span>
+          <input id="files" type="file" accept=".xls,.xlsx" multiple>
+        </label>
+        <div class="upload-action"><div id="file-list" class="file-list">선택한 파일이 없습니다.</div><button id="import-button" class="primary" disabled>선택한 파일 불러오기</button><p class="hint">파일의 상품명 컬럼을 자동으로 찾습니다.</p></div>
+      </div>
+    </section>
+    <section id="day-overview" class="review-card day-overview" aria-labelledby="day-title" hidden>
+      <div class="review-heading"><div><h2 id="day-title">날짜별 모든 작업</h2><p id="day-description" class="description"></p><p class="hint">작업 제목을 눌러 내용을 펼치거나 접으세요.</p></div></div>
+      <div class="table-wrap"><table class="day-table"><thead><tr><th>제품명 원본 · 옵션</th><th>정리된 제품명</th><th>검수 메모</th><th class="status-column">검수 상태</th></tr></thead><tbody id="day-rows"></tbody></table></div>
+    </section>
+    <section id="workspace" class="workspace" aria-labelledby="review-title" hidden>
+      <div class="metrics">
+        <div><span>현재 주문 행</span><strong id="total-count">0</strong><small>중복 행 포함 · 삭제한 행 제외</small></div>
+        <div><span>상품명 항목</span><strong id="name-count">0</strong><small>같은 이름과 옵션은 묶어서 표시</small></div>
+        <div><span>검수 완료</span><strong id="confirmed-count">0</strong><small>직원이 확인한 상품명</small></div>
+        <div><span>확인 필요</span><strong id="attention-count">0</strong><small>정보가 부족하거나 상충하는 항목</small></div>
+      </div>
+      <section class="review-card">
+        <div class="review-heading"><div class="section-label"><span class="step-label">02</span><div><h2 id="review-title">상품명 정리와 검수</h2><p id="batch-description"></p></div></div><div class="review-actions"><button id="delete-batch-button" class="delete-button" data-delete-control>작업 삭제</button><button id="normalize-button" class="primary">미정리 상품명 정리</button></div></div>
+        <div class="review-info"><span id="progress">원본과 옵션을 함께 읽어 상품명을 정리합니다.</span><span id="dirty-indicator"></span></div>
+        <div class="toolbar"><div class="filters"><input id="search" type="search" placeholder="원본·정리된 상품명 검색" aria-label="상품명 검색"><select id="status-filter" aria-label="검수상태 필터"><option value="all">모든 항목</option><option value="pending">미정리</option><option value="review">검수 대기</option><option value="attention">확인 필요</option><option value="confirmed">검수 완료</option></select></div><div class="edit-actions"><button id="delete-selected-button" class="delete-button" data-delete-control disabled>선택 항목 삭제</button><button id="confirm-button" disabled>선택 항목 검수 완료</button><button id="save-button" disabled>수정 내용 저장</button></div></div>
+        <div class="table-wrap"><table><thead><tr><th class="select-column"><input id="select-all" type="checkbox" aria-label="현재 표시된 항목 모두 선택"></th><th>제품명 원본 · 옵션</th><th>정리된 제품명</th><th>검수 메모</th><th class="status-column">검수 상태</th></tr></thead><tbody id="rows"></tbody></table><div id="no-results" class="no-results" hidden>조건에 맞는 항목이 없습니다.</div></div>
+        <div class="table-footer"><span id="visible-count"></span><button id="show-more" hidden>더 보기</button><span>수정한 이름은 원본 주문의 모든 해당 행에 반영됩니다.</span></div>
+        <div class="export-bar"><div><strong>검수한 이름을 엑셀로 전달하세요.</strong><p id="export-description">원본 컬럼과 행 순서를 유지하고 상품명을 교체한 XLSX를 다운로드합니다.</p></div><div class="export-actions"><select id="export-kind" aria-label="다운로드할 파일 종류"><option value="orders">주문 파일 · 상품명 교체</option><option value="names">검수용 상품명 목록</option></select><button id="export-button" class="primary" disabled>엑셀 다운로드</button></div></div>
+      </section>
+    </section>
+    <section id="empty-state" class="empty-state"><div class="empty-line"></div><h2>주문 파일을 불러오세요.</h2><p>정리한 상품명과 검수 내용은 저장되어 다음에 이어서 작업할 수 있습니다.</p></section>
+  </main>
+  <footer><span>system0 · 주문 상품명 정리</span><span id="connection-status">설정 확인 중</span><button id="backup-button" class="text-button">데이터 백업</button></footer>
+</body>
+</html>
