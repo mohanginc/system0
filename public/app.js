@@ -86,6 +86,32 @@ function draft(group, change) {
   drafts.set(group.id, { ids: group.ids, cleanedName: row.cleanedName || '', reviewNote: row.reviewNote || '', status: row.status, ...change });
   updateControls();
 }
+async function saveReview(targets, status = 'confirmed') {
+  if (!current || busy || current.batch.running || !targets.length) return;
+  if (targets.some(group => !values(group).cleanedName.trim())) {
+    renderRows(); message('상품명을 입력하거나 정리한 뒤 검수 완료를 선택하세요.', true); return;
+  }
+  const changes = targets.flatMap(group => {
+    const row = values(group);
+    return group.ids.map(id => ({ id, cleanedName: row.cleanedName, reviewNote: row.reviewNote, status }));
+  });
+  setBusy(true); message('검수 내용을 저장하고 있습니다.');
+  try {
+    const detail = await api(`/api/batches/${current.batch.id}/rows`, json('PATCH', { changes }));
+    current = detail;
+    const saved = new Map(detail.rows.map(row => [row.id, row]));
+    targets.forEach(group => {
+      Object.assign(group, saved.get(group.id)); drafts.delete(group.id); selected.delete(group.id);
+    });
+    if (!hasChanges()) applyDetail(detail);
+    else { updateMetrics(); renderRows(); }
+    message(status === 'confirmed' ? '검수 완료와 저장을 마쳤습니다.' : '검수 완료를 해제하고 저장했습니다.');
+    try { await loadHistory(); }
+    catch (error) { message(`검수 내용은 저장했지만 작업 목록을 갱신하지 못했습니다. ${error.message}`, true); }
+  } catch (error) {
+    renderRows(); message(`검수 내용을 저장하지 못했습니다. ${error.message}`, true);
+  } finally { setBusy(false); }
+}
 function cell(text, className) {
   const element = document.createElement('div'); element.className = className; element.textContent = text; return element;
 }
@@ -116,9 +142,8 @@ function renderRows() {
     const statusCell = tr.insertCell(), statusBadge = cell(labels[row.status], `status ${row.status}`), confirmLabel = document.createElement('label'), confirm = document.createElement('input');
     confirm.type = 'checkbox'; confirm.checked = row.status === 'confirmed'; confirmLabel.className = 'confirmed-checkbox';
     confirm.addEventListener('change', () => {
-      if (confirm.checked && !values(group).cleanedName.trim()) { confirm.checked = false; message('상품명을 입력하거나 정리한 뒤 검수 완료를 선택하세요.', true); return; }
       const status = confirm.checked ? 'confirmed' : (group.status === 'attention' ? 'attention' : 'review');
-      draft(group, { status }); statusBadge.textContent = labels[status]; statusBadge.className = `status ${status}`;
+      saveReview([group], status);
     });
     const remove = document.createElement('button'); remove.textContent = '항목 삭제'; remove.className = 'delete-button item-delete'; remove.dataset.deleteControl = '';
     remove.setAttribute('aria-label', `${row.originalName} 항목 삭제`);
@@ -279,7 +304,7 @@ $('normalize-button').addEventListener('click', async () => {
   }, 2000);
   try { const detail = await api(`/api/batches/${id}/normalize`, json('POST', { rowIds })); applyDetail(detail); message('상품명 정리가 끝났습니다. 이름과 확인 필요 항목을 검수하세요.'); }
   catch (error) { try { applyDetail(await api(`/api/batches/${id}`)); } catch {} message(error.message, true); }
-  finally { active = false; clearInterval(timer); setBusy(false, '수정한 이름과 검수 상태를 저장한 뒤 엑셀로 다운로드하세요.'); }
+  finally { active = false; clearInterval(timer); setBusy(false, '이름과 메모를 확인하고 검수 완료를 선택한 뒤 엑셀로 다운로드하세요.'); }
 });
 $('save-button').addEventListener('click', async () => {
   const changes = [...drafts.values()].flatMap(({ ids, ...change }) => ids.map((id) => ({ id, ...change })));
@@ -288,9 +313,7 @@ $('save-button').addEventListener('click', async () => {
   catch (error) { message(error.message, true); } finally { setBusy(false); }
 });
 $('confirm-button').addEventListener('click', () => {
-  const targets = groups.filter((row) => selected.has(row.id));
-  if (targets.some((row) => !values(row).cleanedName.trim())) { message('선택한 항목에 미정리 상품명이 있습니다. 먼저 상품명을 정리하세요.', true); return; }
-  targets.forEach((row) => draft(row, { status: 'confirmed' })); renderRows(); message('검수 완료를 선택했습니다. 수정 내용 저장을 눌러 반영하세요.');
+  saveReview(groups.filter(row => selected.has(row.id)));
 });
 $('select-all').addEventListener('change', () => { filteredGroups().slice(0, visibleLimit).forEach((row) => $('select-all').checked ? selected.add(row.id) : selected.delete(row.id)); renderRows(); });
 for (const id of ['search', 'status-filter']) $(id).addEventListener(id === 'search' ? 'input' : 'change', () => { visibleLimit = 80; renderRows(); });

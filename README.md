@@ -10,6 +10,17 @@ Windows 10·11의 64비트 환경에서 `outputs/installer/system0-setup-0.1.4.e
 
 설치 파일을 다시 만들 때 `npm.cmd run installer:build`를 실행합니다. 공식 Node.js 24.21.0과 Inno Setup 7.1.0을 내려받아 SHA-256을 확인한 뒤, 실행에 필요한 파일만 패키징합니다. 개발 컴퓨터의 `.env`와 DB는 포함하지 않습니다. `npm.cmd run installer:test`는 완성된 EXE를 임시 폴더에 설치해 번들 실행·엑셀 다운로드·업데이트·데이터 보존을 확인하고 정리합니다. 실제 운영 DB와 키는 사용하지 않으며 API 호출 비용도 발생하지 않습니다.
 
+0.1.4 설치판의 **검수 완료 즉시 저장**은 가벼운 CMD 패치로 적용할 수 있습니다. 프로젝트 폴더에서 PowerShell로 직접 빌드하고 검사합니다.
+
+```powershell
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File installer/build-patch.ps1
+powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/patch.test.ps1
+```
+
+기본 결과는 `outputs/installer/system0-patch-review-save.cmd`입니다. 다른 출력 경로가 필요하면 빌드 명령에 `-OutputFile`을 지정합니다. 패치 파일 하나를 운영 컴퓨터로 옮긴 뒤 앱 실행 창에서 `Ctrl+C`로 종료하고, CMD를 더블클릭합니다. 적용 후 기존 아이콘으로 앱을 실행하고 브라우저를 새로고침합니다.
+
+이 패치는 기본 경로 `%LOCALAPPDATA%/Programs/system0`에 설치된 0.1.4 전용이며 `public/app.js`만 교체합니다. DB와 `.env`는 유지합니다. 처음 설치하는 컴퓨터에는 전체 설치 파일이 필요합니다.
+
 ## 개발 컴퓨터 실행
 
 Node.js 24 이상이 필요합니다. 프로젝트 폴더에서 실행합니다.
