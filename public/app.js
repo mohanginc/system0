@@ -1,6 +1,7 @@
 'use strict';
 const $ = (id) => document.getElementById(id);
 const labels = { pending: '미정리', review: '검수 대기', attention: '확인 필요', confirmed: '검수 완료' };
+const originLabels = { ai: 'AI로 정리', reused: '기존 이름 재사용', manual: '직접 입력', imported: '기존 자료' };
 let files = [], current = null, groups = [], historyBatches = [], busy = false, keyConfigured = false, visibleLimit = 80;
 const selected = new Set(), drafts = new Map(), deletedRowIds = new Set();
 const workDate = (value = Date.now()) => new Date(new Date(value).getTime() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
@@ -23,9 +24,10 @@ function groupRows(rows) {
   const result = new Map();
   for (const row of rows) {
     const key = JSON.stringify([row.originalName, row.optionName, row.cleanedName, row.status, row.reviewNote]);
-    if (!result.has(key)) result.set(key, { ...row, ids: [], sources: new Set() });
+    if (!result.has(key)) result.set(key, { ...row, ids: [], sources: new Set(), nameSources: new Set() });
     const group = result.get(key);
     group.ids.push(row.id); group.sources.add(row.sourceFile);
+    if (row.nameSource) group.nameSources.add(row.nameSource);
   }
   return [...result.values()];
 }
@@ -62,7 +64,7 @@ function updateControls() {
   $('delete-batch-button').disabled ||= !current;
   $('delete-selected-button').disabled ||= !selected.size;
   const pending = remainingGroups().filter((group) => !group.cleanedName && (!selected.size || selected.has(group.id)));
-  $('normalize-button').disabled = locked || !keyConfigured || !pending.length || hasChanges();
+  $('normalize-button').disabled = locked || !pending.length || hasChanges();
   $('normalize-button').textContent = selected.size ? `선택 상품명 정리 (${pending.length})` : `미정리 상품명 정리 (${pending.length})`;
   $('export-button').disabled = locked || !current || !current.rows.length || current.rows.some((row) => !row.cleanedName) || hasChanges();
   $('dirty-indicator').textContent = [drafts.size ? `저장하지 않은 수정 ${drafts.size}건` : '', deletedRowIds.size ? `삭제 예정 주문 ${deletedRowIds.size}행` : ''].filter(Boolean).join(' · ');
@@ -102,6 +104,7 @@ async function saveReview(targets, status = 'confirmed') {
     const saved = new Map(detail.rows.map(row => [row.id, row]));
     targets.forEach(group => {
       Object.assign(group, saved.get(group.id)); drafts.delete(group.id); selected.delete(group.id);
+      group.nameSources = new Set(group.ids.map(id => saved.get(id)?.nameSource).filter(Boolean));
     });
     if (!hasChanges()) applyDetail(detail);
     else { updateMetrics(); renderRows(); }
@@ -114,6 +117,15 @@ async function saveReview(targets, status = 'confirmed') {
 }
 function cell(text, className) {
   const element = document.createElement('div'); element.className = className; element.textContent = text; return element;
+}
+function nameOrigin(group) {
+  const element = document.createElement('div'); element.className = 'name-origin';
+  for (const source of group.nameSources) {
+    const label = document.createElement('span');
+    label.className = `name-origin-label ${originLabels[source] ? source : 'imported'}`;
+    label.textContent = originLabels[source] || originLabels.imported; element.append(label);
+  }
+  element.hidden = !element.childElementCount; return element;
 }
 function renderRows() {
   const filtered = filteredGroups(), visible = filtered.slice(0, visibleLimit), body = $('rows');
@@ -134,7 +146,7 @@ function renderRows() {
       const status = values(group).status === 'pending' && nameInput.value.trim() ? 'review' : values(group).status;
       draft(group, { cleanedName: nameInput.value, status }); statusBadge.textContent = labels[status]; statusBadge.className = `status ${status}`;
     });
-    nameCell.append(nameInput);
+    nameCell.append(nameInput, nameOrigin(group));
     const noteCell = tr.insertCell(), noteInput = document.createElement('textarea');
     noteInput.value = row.reviewNote || ''; noteInput.className = 'note-input'; noteInput.placeholder = '필요한 검수 메모';
     noteInput.setAttribute('aria-label', `${row.originalName}의 검수 메모`);
@@ -204,7 +216,7 @@ async function showDayOverview() {
       original.append(cell(group.originalName, 'original-name'));
       if (group.optionName) original.append(cell(`옵션 · ${group.optionName}`, 'option-name'));
       original.append(cell(`주문 ${group.ids.length}행`, 'source-info'));
-      row.insertCell().textContent = group.cleanedName || '미정리';
+      row.insertCell().append(document.createTextNode(group.cleanedName || '미정리'), nameOrigin(group));
       row.insertCell().textContent = group.reviewNote;
       row.insertCell().append(cell(labels[group.status], `status ${group.status}`));
     }
@@ -296,13 +308,13 @@ $('batch-select').addEventListener('change', () => openBatch($('batch-select').v
 $('normalize-button').addEventListener('click', async () => {
   const id = current.batch.id, rowIds = selected.size ? groups.filter((row) => selected.has(row.id)).flatMap((row) => row.ids) : undefined;
   const initialCount = current.rows.filter((row) => !!row.cleanedName).length;
-  setBusy(true, '상품명과 옵션을 읽고 정리하고 있습니다…'); message('');
+  setBusy(true, '기존 이름을 찾고 새 상품의 이름을 정리하고 있습니다…'); message('');
   let polling = false, active = true;
   const timer = setInterval(async () => {
     if (polling) return; polling = true;
     try { const latest = await api(`/api/batches/${id}`); if (!active) return; updateMetrics(latest); const count = latest.rows.filter((row) => !!row.cleanedName).length - initialCount; $('progress').textContent = `상품명 정리 중… 주문 ${count.toLocaleString()}행에 이름을 반영했습니다.`; } catch {} finally { polling = false; }
   }, 2000);
-  try { const detail = await api(`/api/batches/${id}/normalize`, json('POST', { rowIds })); applyDetail(detail); message('상품명 정리가 끝났습니다. 이름과 확인 필요 항목을 검수하세요.'); }
+  try { const detail = await api(`/api/batches/${id}/normalize`, json('POST', { rowIds })); applyDetail(detail); message('상품명 정리가 끝났습니다. 이름 아래의 출처와 확인 필요 항목을 확인하세요.'); }
   catch (error) { try { applyDetail(await api(`/api/batches/${id}`)); } catch {} message(error.message, true); }
   finally { active = false; clearInterval(timer); setBusy(false, '이름과 메모를 확인하고 검수 완료를 선택한 뒤 엑셀로 다운로드하세요.'); }
 });
@@ -351,10 +363,10 @@ async function start() {
   setBusy(true);
   try {
     const status = await api('/api/status'); keyConfigured = status.apiKeyConfigured;
-    $('connection-status').textContent = keyConfigured ? 'API 키 등록됨 · 로컬 저장' : 'API 키 미설정';
+    $('connection-status').textContent = keyConfigured ? 'API 키 등록됨 · 로컬 저장' : 'API 키 미설정 · 기존 이름 재사용 가능';
     await loadHistory(); await showDayOverview();
     if (current?.batch.running) resumeProgress(current.batch.id);
-    if (!keyConfigured) message('상품명 정리를 사용하려면 .env의 OPENAI_API_KEY를 설정하고 앱을 다시 실행하세요.', true);
+    if (!keyConfigured) message('기존 이름은 재사용할 수 있습니다. 처음 보는 상품을 AI로 정리하려면 API 키를 설정하고 앱을 다시 실행하세요.');
   } catch (error) { message(`서버 연결을 확인하세요. ${error.message}`, true); } finally { setBusy(false); }
 }
 function resumeProgress(id) {

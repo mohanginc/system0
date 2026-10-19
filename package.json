@@ -9,10 +9,12 @@
   "scripts": {
     "start": "node server.mjs",
     "test": "node --test test/*.test.mjs",
+    "naver:check": "node scripts/check-naver-api.mjs",
     "installer:build": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File installer/build.ps1",
     "installer:test": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File test/installer.test.ps1"
   },
   "dependencies": {
+    "bcryptjs": "3.0.3",
     "express": "^5.2.1",
     "fflate": "^0.8.3",
     "multer": "^2.4.0",

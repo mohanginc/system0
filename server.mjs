@@ -10,6 +10,10 @@ import { randomUUID } from 'node:crypto';
 import { openDatabase, batchDetail, listBatches, deleteBatch, deleteRows } from './lib/database.mjs';
 import { importFiles, exportDownload } from './lib/excel.mjs';
 import { normalizeBatch, reviseRows } from './lib/naming.mjs';
+import { listLlmPurposes, llmUsage } from './lib/llm.mjs';
+import { shippingBoard, shippingDates } from './lib/shipping.mjs';
+import { createNaverClient } from './lib/naver.mjs';
+import { previewShippingBoard } from './lib/shipping-preview.mjs';
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 const envFile = process.env.SYSTEM0_ENV_FILE || path.join(projectRoot, '.env');
@@ -23,11 +27,12 @@ export function defaultDatabasePath() {
 }
 
 export function createApp({ databasePath = process.env.DATABASE_PATH || defaultDatabasePath(),
-  model = process.env.OPENAI_MODEL || 'gpt-6.1-sol', client,
+  model = process.env.OPENAI_MODEL || 'gpt-6.1-sol', client, naver = createNaverClient(),
   apiKey = process.env.OPENAI_API_KEY } = {}) {
   const db = openDatabase(databasePath);
   const ai = client === undefined ? (apiKey ? new OpenAI({ apiKey, timeout: 120000, maxRetries: 0 }) : null) : client;
   const running = new Set();
+  let previewRunning = false;
   const app = express();
   app.disable('x-powered-by');
   app.locals.db = db;
@@ -71,6 +76,18 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
   };
 
   app.get('/api/status', (_request, response) => response.json({ app: 'system0', instance: realpathSync(projectRoot), apiKeyConfigured: Boolean(ai), model }));
+  app.use('/api/shipping', (_request, response, next) => { response.set('Cache-Control', 'no-store'); next(); });
+  app.get('/api/shipping/board', (request, response) => response.json(shippingBoard(db, request.query.date, request.query.batchId)));
+  app.get('/api/shipping/dates', (request, response) => response.json(shippingDates(db, request.query.month)));
+  app.post('/api/shipping/preview', async (_request, response) => {
+    if (previewRunning) return response.status(409).json({ error: '신규 주문 조회·상품명 정리 중입니다. 완료 후 갱신해 주세요.' });
+    previewRunning = true;
+    try { response.json(await previewShippingBoard(db, naver, ai, model)); }
+    catch (error) { response.status(400).json({ error: error.message }); }
+    finally { previewRunning = false; }
+  });
+  app.get('/api/llm/purposes', (_request, response) => response.json(listLlmPurposes(db)));
+  app.get('/api/llm/usage', (request, response) => response.json(llmUsage(db, request.query.from, request.query.to, request.query.purpose)));
   app.get('/api/batches', (request, response) => response.json({ batches: listBatches(db, request.query.date).map(batch => ({ ...batch, running: running.has(batch.id) })) }));
   app.post('/api/import', upload.array('files', 100), (request, response) => {
     const files = request.files || [];

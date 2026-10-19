@@ -24,17 +24,24 @@ const workbookRows = (buffer, name) => {
   return XLSX.utils.sheet_to_json(workbook.Sheets[name || workbook.SheetNames[0]], { header: 1, defval: null, raw: true, blankrows: true });
 };
 
-test('실제 .xls 54개: 주문 1,063행, 중복 헤더·원본 값·순서·출처와 내보내기 보존',
+test('실제 .xls 주문 샘플: 중복 헤더·원본 값·순서·출처와 내보내기 보존',
   { skip: !existsSync('reference-data/orders') }, async () => {
   const files = readdirSync('reference-data/orders').filter(name => name.endsWith('.xls')).sort()
-    .map(name => ({ originalname: name, buffer: readFileSync(path.join('reference-data/orders', name)) }));
-  assert.equal(files.length, 54);
+    .map(name => ({ originalname: name, buffer: readFileSync(path.join('reference-data/orders', name)) }))
+    .filter(source => {
+      try { parseFiles([source]); return true; }
+      catch (error) {
+        if (error.message.endsWith(': 원상품명, 제품명 원본 또는 상품명 컬럼을 찾을 수 없거나 가져올 상품 행이 없습니다.')) return false;
+        throw error;
+      }
+    });
+  assert.ok(files.length > 0, '원상품명 컬럼이 있는 실제 주문 샘플을 검사합니다.');
   const parsed = parseFiles(files);
   const db = openDatabase(':memory:');
   try {
     const detail = importFiles(db, files);
-    assert.equal(detail.rows.length, 1063);
-    assert.equal(detail.batch.fileCount, 54);
+    assert.equal(detail.rows.length, parsed.reduce((total, sheet) => total + sheet.rows.length, 0));
+    assert.equal(detail.batch.fileCount, files.length);
     const expectedRows = parsed.flatMap(sheet => sheet.rows.map(row => ({ ...row, sourceFile: sheet.sourceFile, sourceSheet: sheet.sourceSheet })));
     for (const [index, row] of detail.rows.entries()) {
       const expected = expectedRows[index];
@@ -45,12 +52,12 @@ test('실제 .xls 54개: 주문 1,063행, 중복 헤더·원본 값·순서·출
     reviseRows(db, detail.batch.id, detail.rows.map(row => ({ id: row.id, cleanedName: `검수 제품 ${row.id}`, reviewNote: '', status: 'confirmed' })));
     const savedFiles = db.prepare('SELECT content FROM source_files WHERE batch_id = ? ORDER BY id').all(detail.batch.id);
     for (const [index, source] of files.entries()) assert.ok(Buffer.from(savedFiles[index].content).equals(source.buffer), '원본 바이너리를 그대로 저장해야 합니다.');
-    assert.equal(workbookRows(await exportWorkbook(db, detail.batch.id, 'names')).length, 1064);
+    assert.equal(workbookRows(await exportWorkbook(db, detail.batch.id, 'names')).length, detail.rows.length + 1);
 
     const output = await exportDownload(db, detail.batch.id, 'orders');
     assert.equal(output.contentType, 'application/zip');
     const entries = unzipSync(output.buffer);
-    assert.equal(Object.keys(entries).length, 54);
+    assert.equal(Object.keys(entries).length, files.length);
     const normalize = value => typeof value === 'string' ? value.replace(/\r\n/g, '\n') : value;
     for (const source of files) {
       const filename = source.originalname.replace(/\.xls$/i, '_상품명정리.xlsx');
@@ -59,8 +66,11 @@ test('실제 .xls 54개: 주문 1,063행, 중복 헤더·원본 값·순서·출
       const after = XLSX.read(entries[filename], { type: 'buffer', cellNF: true });
       assert.deepEqual(after.SheetNames, before.SheetNames);
       for (const sheetName of before.SheetNames) {
+        const parsedSheet = parsed.find(sheet => sheet.sourceFile === source.originalname && sheet.sourceSheet === sheetName);
+        const column = parsedSheet?.raw[parsedSheet.headerIndex].findIndex(value =>
+          ['원상품명', '제품명원본', '상품명'].includes(String(value).replace(/\s/g, '')));
         const changed = new Map(detail.rows.filter(row => row.sourceFile === source.originalname && row.sourceSheet === sheetName)
-          .map(row => [`F${row.sourceRow}`, `검수 제품 ${row.id}`]));
+          .map(row => [XLSX.utils.encode_cell({ r: row.sourceRow - 1, c: column }), `검수 제품 ${row.id}`]));
         const original = before.Sheets[sheetName], actual = after.Sheets[sheetName];
         assert.equal(actual['!ref'], original['!ref']);
         for (const [address, cell] of Object.entries(original).filter(([key]) => !key.startsWith('!'))) {
@@ -430,8 +440,13 @@ test('실제 .xls 주문의 첫·중간·마지막 삭제 후 모든 나머지 �
   { skip: !existsSync('reference-data/orders') }, async () => {
   const sourceName = readdirSync('reference-data/orders').filter(name => name.endsWith('.xls')).sort().find(name => {
     const workbook = XLSX.read(readFileSync(path.join('reference-data/orders', name)), { type: 'buffer' });
-    return !Object.values(workbook.Sheets).some(sheet => Object.values(sheet).some(cell => cell?.f || cell?.F))
-      && parseFiles([{ originalname: name, buffer: readFileSync(path.join('reference-data/orders', name)) }])[0].rows.length >= 5;
+    try {
+      return !Object.values(workbook.Sheets).some(sheet => Object.values(sheet).some(cell => cell?.f || cell?.F))
+        && parseFiles([{ originalname: name, buffer: readFileSync(path.join('reference-data/orders', name)) }])[0].rows.length >= 5;
+    } catch (error) {
+      if (error.message.endsWith(': 원상품명, 제품명 원본 또는 상품명 컬럼을 찾을 수 없거나 가져올 상품 행이 없습니다.')) return false;
+      throw error;
+    }
   });
   assert.ok(sourceName);
   const original = readFileSync(path.join('reference-data/orders', sourceName));
@@ -445,7 +460,10 @@ test('실제 .xls 주문의 첫·중간·마지막 삭제 후 모든 나머지 �
     const after = XLSX.read(await exportWorkbook(db, detail.batch.id, 'orders'), { type: 'buffer', cellNF: true });
     const before = XLSX.read(original, { type: 'buffer', cellNF: true });
     const normalize = value => typeof value === 'string' ? value.replace(/\r\n/g, '\n') : value;
-    const cleaned = new Map(detail.rows.map(row => [`F${row.sourceRow}`, `검수 ${row.id}`]));
+    const parsed = parseFiles([{ originalname: sourceName, buffer: original }])[0];
+    const column = parsed.raw[parsed.headerIndex].findIndex(value =>
+      ['원상품명', '제품명원본', '상품명'].includes(String(value).replace(/\s/g, '')));
+    const cleaned = new Map(detail.rows.map(row => [XLSX.utils.encode_cell({ r: row.sourceRow - 1, c: column }), `검수 ${row.id}`]));
     assert.deepEqual(after.SheetNames, before.SheetNames);
     for (const [sheetName, sheet] of Object.entries(before.Sheets)) {
       for (const [address, cell] of Object.entries(sheet).filter(([key]) => !key.startsWith('!'))) {

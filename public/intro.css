@@ -1,0 +1,22 @@
+body.intro-playing { overflow: hidden; }
+.brand-intro {
+  position: fixed; inset: 0; z-index: 1000;
+  display: grid; place-items: center; overflow: hidden;
+  background: #0C1534 url('/assets/intro-night-sky.png') center / cover no-repeat;
+}
+.brand-intro::before {
+  content: ''; position: absolute; inset: 0;
+  background: radial-gradient(ellipse at center, rgba(12, 21, 52, .08), rgba(12, 21, 52, .3));
+}
+.intro-logo {
+  position: relative; display: block; width: min(78vw, 960px); height: auto; opacity: 0;
+}
+.intro-star-trace { stroke-dasharray: 100; stroke-dashoffset: 100; }
+.brand-intro.is-playing { animation: intro-exit .6s ease-in 5.4s forwards; }
+.is-playing .intro-logo { animation: intro-logo-in 1.6s ease-out .25s forwards; }
+.is-playing .intro-star-trace { animation: intro-star-fill var(--trace-duration) linear var(--trace-delay) forwards; }
+@keyframes intro-logo-in { to { opacity: 1; } }
+@keyframes intro-star-fill { to { stroke-dashoffset: 0; } }
+@keyframes intro-exit { to { opacity: 0; visibility: hidden; } }
+@media (max-width: 600px) { .intro-logo { width: 88vw; } }
+@media (prefers-reduced-motion: reduce) { .brand-intro { display: none; } }

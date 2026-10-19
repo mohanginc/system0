@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>출고 보드 · system0</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/brand-star.svg">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/shipping-board.css">
+  <script src="/shipping-board.js" defer></script>
+</head>
+<body class="shipping-board">
+  <header class="header">
+    <a class="brand" href="/" aria-label="system0 홈"><img class="brand-mark" src="/assets/brand-star.svg" alt="베이비스텔라 별 로고" width="34" height="56"> system0 <span class="brand-caption">출고 보드</span></a>
+    <a class="text-link back-link" href="/">상품명 정리로 돌아가기 <span aria-hidden="true">↗</span></a>
+  </header>
+  <nav class="board-modes" aria-label="출고 보드 모드">
+    <button id="confirmed-mode" type="button" aria-pressed="true">확인한 주문</button>
+    <button id="new-mode" type="button" aria-pressed="false">신규 주문현황</button>
+  </nav>
+  <main class="board-layout">
+    <aside class="board-sidebar" aria-label="출고 작업 선택">
+      <section class="board-calendar" aria-labelledby="month-title">
+        <div class="month-heading"><button id="previous-month" class="month-arrow" type="button" aria-label="이전 달">‹</button><h2 id="month-title"></h2><button id="next-month" class="month-arrow" type="button" aria-label="다음 달">›</button></div>
+        <div class="calendar-weekdays" aria-hidden="true"><span>일</span><span>월</span><span>화</span><span>수</span><span>목</span><span>금</span><span>토</span></div>
+        <div id="calendar-days" class="calendar-days" role="group" aria-label="작업 날짜 선택"></div>
+        <div class="calendar-bottom"><span class="calendar-legend"><i aria-hidden="true"></i>작업 있는 날</span><button id="today-button" type="button">오늘</button></div>
+      </section>
+      <section class="board-jobs" aria-labelledby="jobs-title"><div class="jobs-heading"><h2 id="jobs-title">작업 목록</h2><span id="job-count">0개</span></div><div id="job-list" class="job-list"></div></section>
+      <p class="sidebar-note">한국 시간의 작업 등록일 기준입니다.</p>
+    </aside>
+    <section class="board-content" aria-labelledby="board-title">
+      <div class="board-heading"><div><p id="board-date" class="board-date"></p><h1 id="board-title">출고 목록</h1></div><div class="board-actions"><button id="refresh-button" type="button">새로고침</button><button id="fullscreen-button" type="button">전체 화면</button></div></div>
+      <div id="board-message" class="board-message" role="status" hidden></div>
+      <div class="board-summary" aria-label="출고 집계"><div class="summary-count"><span id="quantity-label">출고 묶음</span><strong id="bundle-count">—</strong></div><div class="summary-count"><span>상품명 항목</span><strong id="group-count">—</strong></div><div class="summary-count attention-count"><span id="attention-label">미정리 묶음</span><strong id="unprepared-count">—</strong></div><div class="invoice-note"><span id="invoice-status" class="invoice-status">송장 정보 연결 전</span><p id="invoice-description">현재 색상은 송장 완료 여부를 나타내지 않습니다.</p></div></div>
+      <p id="preview-range" class="preview-range" hidden></p>
+      <div id="board-notices" class="board-notices" hidden><ul id="notice-list"></ul></div>
+      <div class="list-heading"><p>상품명을 누르면 수취인·전화번호·동네가 펼쳐집니다.</p><span id="updated-at">조회 중</span></div>
+      <div id="shipment-groups" class="shipment-grid" aria-busy="true"></div>
+      <div id="board-empty" class="board-empty" hidden><span class="empty-star" aria-hidden="true">✧</span><h2 id="empty-title">이 날짜에 저장된 작업이 없습니다.</h2><p id="empty-description">달력에서 작업이 있는 날짜를 선택하세요.</p></div>
+      <p id="board-footnote" class="board-footnote">수량은 원본 주문 행 기준이며 실제 합포장 확정 상자 수는 아닙니다. 한 행에 여러 제품이 포함될 수 있습니다.</p>
+    </section>
+  </main>
+</body>
+</html>

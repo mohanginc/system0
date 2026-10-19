@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI 호출 내역 · system0</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/brand-star.svg">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/llm-usage.css">
+  <script src="/llm-usage.js" defer></script>
+</head>
+<body>
+  <header class="header">
+    <a class="brand" href="/" aria-label="system0 홈"><img class="brand-mark" src="/assets/brand-star.svg" alt="베이비스텔라 별 로고" width="34" height="56"> system0 <span class="brand-caption">AI 호출 내역</span></a>
+    <a class="text-link" href="/">주문 업무로 돌아가기</a>
+  </header>
+  <main>
+    <div id="message" class="message" role="status" hidden></div>
+    <section class="review-card" aria-labelledby="usage-title">
+      <div class="review-heading"><div><h2 id="usage-title">AI 호출 내역</h2><p class="description">날짜와 목적에 따라 실제 AI 요청 횟수를 확인합니다.</p><p class="hint" id="tracking-note"></p></div></div>
+      <form id="usage-form" class="usage-filters">
+        <label>시작 날짜<input id="date-from" type="date" required></label>
+        <label>종료 날짜<input id="date-to" type="date" required></label>
+        <label>호출 목적<select id="purpose"><option value="">모든 목적</option></select></label>
+        <button class="primary" type="submit">조회</button>
+      </form>
+      <div id="usage-results" hidden>
+        <div class="metrics usage-metrics">
+          <div><span>전체 호출</span><strong id="calls-count">0</strong><small>기존 이름 재사용은 포함하지 않음</small></div>
+          <div><span>성공</span><strong id="success-count">0</strong><small>정상적으로 처리한 요청</small></div>
+          <div><span>실패</span><strong id="failed-count">0</strong><small>재시도는 별도 호출로 기록</small></div>
+          <div><span>진행 중</span><strong id="running-count">0</strong><small>조회 시점에 처리 중인 요청</small></div>
+        </div>
+        <div class="table-wrap"><table class="usage-table"><thead><tr><th>날짜</th><th>호출 목적</th><th>호출 횟수</th><th>성공</th><th>실패</th><th>진행 중</th></tr></thead><tbody id="usage-rows"></tbody></table></div>
+        <p id="empty-usage" class="usage-note" hidden></p>
+      </div>
+      <p class="usage-note">날짜는 한국 시간을 기준으로 합니다. 상품 여러 개를 한 요청으로 묶으면 호출 1회이며, 상품 수와 호출 횟수는 다릅니다.</p>
+    </section>
+  </main>
+  <footer><span>system0 · AI 호출 내역</span></footer>
+</body>
+</html>

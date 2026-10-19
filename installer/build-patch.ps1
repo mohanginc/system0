@@ -1,18 +1,31 @@
 ﻿param([string]$OutputFile)
 $ErrorActionPreference = 'Stop'
 $taskRoot = Split-Path -Parent $PSScriptRoot
-if (-not $OutputFile) { $OutputFile = Join-Path $taskRoot 'outputs\installer\system0-patch-review-save.cmd' }
+if (-not $OutputFile) { $OutputFile = Join-Path $taskRoot 'outputs\installer\system0-patch-new-orders.cmd' }
 $OutputFile = [System.IO.Path]::GetFullPath($OutputFile)
-$taskBytes = [System.IO.File]::ReadAllBytes((Join-Path $taskRoot 'public\app.js'))
+$taskFiles = @('server.mjs', 'lib/database.mjs', 'lib/naming.mjs', 'lib/llm.mjs', 'lib/shipping.mjs',
+    'lib/naver.mjs', 'lib/shipping-preview.mjs', 'prompts/product-names.md',
+    'node_modules/bcryptjs/index.js', 'node_modules/bcryptjs/package.json', 'node_modules/bcryptjs/LICENSE')
+$taskFiles += Get-ChildItem -LiteralPath (Join-Path $taskRoot 'public') -Recurse -File |
+    Where-Object { $_.Extension -in @('.html', '.css', '.js', '.svg', '.png', '.jpg', '.jpeg', '.webp', '.ico') } |
+    ForEach-Object { $_.FullName.Substring($taskRoot.Length + 1).Replace('\', '/') }
 $taskSha = [System.Security.Cryptography.SHA256]::Create()
-try { $taskHash = [BitConverter]::ToString($taskSha.ComputeHash($taskBytes)).Replace('-', '') }
+try {
+    $taskPayload = @($taskFiles | Sort-Object -Unique | ForEach-Object {
+        $bytes = [System.IO.File]::ReadAllBytes((Join-Path $taskRoot $_))
+        @{ path = $_; base64 = [Convert]::ToBase64String($bytes); sha256 = [BitConverter]::ToString($taskSha.ComputeHash($bytes)).Replace('-', '') }
+    }) | ConvertTo-Json -Depth 4 -Compress
+}
 finally { $taskSha.Dispose() }
 
 $taskScript = @'
 $ErrorActionPreference = 'Stop'
-$pending = $null
+$stage = $null
+$installed = @()
+$preserveStage = $false
+$app = [System.IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Programs\system0'))
+$appBoundary = $app + [System.IO.Path]::DirectorySeparatorChar
 try {
-    $app = Join-Path $env:LOCALAPPDATA 'Programs\system0'
     foreach ($file in @('package.json', 'server.mjs', 'launch.mjs', 'runtime\node.exe', 'public\app.js')) {
         if (-not (Test-Path -LiteralPath (Join-Path $app $file) -PathType Leaf)) {
             throw 'system0 설치를 찾을 수 없습니다. 0.1.4 설치판이 있는 컴퓨터에서 실행해 주세요.'
@@ -26,23 +39,69 @@ try {
     if ($LASTEXITCODE -ne 0) {
         throw 'system0가 실행 중이거나 실행 상태를 확인하지 못했습니다. 실행 창에서 Ctrl+C로 종료한 뒤 다시 실행해 주세요.'
     }
-    $bytes = [Convert]::FromBase64String('__APP_PAYLOAD__')
-    $sha = [System.Security.Cryptography.SHA256]::Create()
-    try { $hash = [BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-', '') }
-    finally { $sha.Dispose() }
-    if ($hash -ne '__APP_SHA256__') { throw '패치 내용이 손상되었습니다. 패치 파일을 다시 받아 주세요.' }
-    $target = Join-Path $app 'public\app.js'
-    $pending = $target + '.patch-' + [Guid]::NewGuid().ToString('N') + '.tmp'
-    [System.IO.File]::WriteAllBytes($pending, $bytes)
-    [System.IO.File]::Replace($pending, $target, [NullString]::Value)
-    $pending = $null
+    $payload = [System.Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('__FILES_PAYLOAD__')) | ConvertFrom-Json
+    $stage = Join-Path $app ('.patch-' + [Guid]::NewGuid().ToString('N'))
+    $seen = @{}
+    foreach ($file in $payload) {
+        if ($file.path -notmatch '^(server\.mjs|lib/(database|naming|llm|shipping|naver|shipping-preview)\.mjs|prompts/product-names\.md|node_modules/bcryptjs/(index\.js|package\.json|LICENSE)|public/[^:]+\.(html|css|js|svg|png|jpg|jpeg|webp|ico))$' -or
+            $file.path.Split('/') -contains '..' -or $file.path.Contains('\') -or $seen.ContainsKey($file.path)) {
+            throw '패치 파일 경로를 확인할 수 없습니다.'
+        }
+        $seen[$file.path] = $true
+        $target = [System.IO.Path]::GetFullPath((Join-Path $app $file.path))
+        if (-not $target.StartsWith($appBoundary, [StringComparison]::OrdinalIgnoreCase)) { throw '패치 대상이 설치 폴더 밖입니다.' }
+        for ($check = $target; $check.Length -ge $app.Length; $check = [System.IO.Path]::GetDirectoryName($check)) {
+            if (Test-Path -LiteralPath $check) {
+                if ((Get-Item -LiteralPath $check -Force).Attributes -band [System.IO.FileAttributes]::ReparsePoint) {
+                    throw '연결된 폴더에는 패치를 적용할 수 없습니다.'
+                }
+            }
+        }
+        $bytes = [Convert]::FromBase64String($file.base64)
+        $sha = [System.Security.Cryptography.SHA256]::Create()
+        try { $hash = [BitConverter]::ToString($sha.ComputeHash($bytes)).Replace('-', '') }
+        finally { $sha.Dispose() }
+        if ($hash -ne $file.sha256) { throw '패치 내용이 손상되었습니다. 패치 파일을 다시 받아 주세요.' }
+        $pending = Join-Path (Join-Path $stage 'new') $file.path
+        [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($pending)) | Out-Null
+        [System.IO.File]::WriteAllBytes($pending, $bytes)
+    }
+    foreach ($file in $payload) {
+        $target = Join-Path $app $file.path
+        $pending = Join-Path (Join-Path $stage 'new') $file.path
+        $backup = Join-Path (Join-Path $stage 'old') $file.path
+        [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($target)) | Out-Null
+        $existed = [System.IO.File]::Exists($target)
+        if ($existed) {
+            [System.IO.Directory]::CreateDirectory([System.IO.Path]::GetDirectoryName($backup)) | Out-Null
+            [System.IO.File]::Replace($pending, $target, $backup)
+        } else { [System.IO.File]::Move($pending, $target) }
+        $installed += @{ target = $target; backup = $backup; existed = $existed }
+    }
     Write-Host '패치 적용 완료. system0를 다시 실행해 주세요.'
     exit 0
 }
-catch { Write-Host $_.Exception.Message -ForegroundColor Red; exit 1 }
-finally { if ($pending -and (Test-Path -LiteralPath $pending)) { Remove-Item -LiteralPath $pending -Force } }
+catch {
+    Write-Host $_.Exception.Message -ForegroundColor Red
+    for ($index = $installed.Count - 1; $index -ge 0; $index--) {
+        $file = $installed[$index]
+        try {
+            if ($file.existed) { [System.IO.File]::Replace($file.backup, $file.target, [NullString]::Value) }
+            else { Remove-Item -LiteralPath $file.target -Force }
+        } catch { $preserveStage = $true; Write-Host ('원래 파일 복구가 필요합니다: ' + $file.target) -ForegroundColor Red }
+    }
+    if ($preserveStage) { Write-Host ('기존 파일 보관 위치: ' + $stage) }
+    exit 1
+}
+finally {
+    if ($stage -and -not $preserveStage -and (Test-Path -LiteralPath $stage)) {
+        $resolvedStage = [System.IO.Path]::GetFullPath($stage)
+        if (-not $resolvedStage.StartsWith($appBoundary, [StringComparison]::OrdinalIgnoreCase)) { throw '패치 임시 폴더 경로 확인 실패' }
+        Remove-Item -LiteralPath $resolvedStage -Recurse -Force
+    }
+}
 '@
-$taskScript = $taskScript.Replace('__APP_PAYLOAD__', [Convert]::ToBase64String($taskBytes)).Replace('__APP_SHA256__', $taskHash)
+$taskScript = $taskScript.Replace('__FILES_PAYLOAD__', [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($taskPayload)))
 $taskEncoded = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes($taskScript))
 $taskBatch = @'
 @echo off
