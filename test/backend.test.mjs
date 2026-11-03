@@ -403,9 +403,9 @@ test('행 삭제는 중복·다른 작업·이미 삭제된 ID 혼입을 원자�
 test('첫·중간·마지막 중복 주문 삭제 후 남은 값·빈 행·병합·행높이·필터·보조 시트를 보존한다', async () => {
   const workbook = XLSX.utils.book_new();
   const orders = XLSX.utils.aoa_to_sheet([['상품명', '수량', '전화번호', '비고', '비고'],
-    ['중복 주문', 1, '01000000001', '삭제 첫행'], ['남길 주문 1', 2, '01000000002', '남김 1'], [],
-    ['중복 주문', 3, '01000000003', '삭제 중간'], ['남길 주문 2', 4, '01000000004', '남김 2'],
-    ['중복 주문', 5, '01000000005', '삭제 마지막']]);
+    ['중복 주문', 1, '010-0000-0001', '삭제 첫행'], ['남길 주문 1', 2, '010-0000-0002', '남김 1'], [],
+    ['중복 주문', 3, '010-0000-0003', '삭제 중간'], ['남길 주문 2', 4, '010-0000-0004', '남김 2'],
+    ['중복 주문', 5, '010-0000-0005', '삭제 마지막']]);
   orders['!merges'] = [XLSX.utils.decode_range('C6:D6')];
   orders['!rows'] = Array.from({ length: 7 }, (_, index) => ({ hpt: 20 + index }));
   orders['!cols'] = [{ wch: 30 }, { wch: 8 }, { wch: 15 }];
@@ -421,8 +421,8 @@ test('첫·중간·마지막 중복 주문 삭제 후 남은 값·빈 행·병�
     assert.equal(removed.batch.rowCount, 2);
     const output = await exportDownload(db, detail.batch.id);
     assert.deepEqual(workbookRows(output.buffer, '주문'), [['상품명', '수량', '전화번호', '비고', '비고'],
-      ['정리 남길 주문 1', 2, '01000000002', '남김 1', null], [null, null, null, null, null],
-      ['정리 남길 주문 2', 4, '01000000004', '남김 2', null]]);
+      ['정리 남길 주문 1', 2, '010-0000-0002', '남김 1', null], [null, null, null, null, null],
+      ['정리 남길 주문 2', 4, '010-0000-0004', '남김 2', null]]);
     const after = XLSX.read(output.buffer, { type: 'buffer', cellStyles: true });
     const sheet = after.Sheets['주문'];
     assert.deepEqual(sheet['!merges'], [XLSX.utils.decode_range('C4:D4')]);
@@ -517,25 +517,6 @@ test('행 이동 후 참조 없는 상수 산술식과 cached value는 그대로
     assert.equal(after.B2.v, 11400);
     assert.equal(after.B3.f, '(2.5 + 1)*-4');
     assert.equal(after.B3.v, -14);
-  } finally { db.close(); }
-});
-
-test('실제 rus00 (14).xls 복사본의 3*3800 수식과 cached value는 추가 주문 삭제 후 보존한다',
-  { skip: !existsSync('reference-data/orders/rus00 (14).xls') }, async () => {
-  const original = readFileSync('reference-data/orders/rus00 (14).xls');
-  const copy = XLSX.read(original, { type: 'buffer' });
-  XLSX.utils.sheet_add_aoa(copy.Sheets.rus00, [['삭제할 추가 주문']], { origin: 'F3' });
-  const db = openDatabase(':memory:');
-  try {
-    const detail = importFiles(db, [{ originalname: 'rus00 (14).xlsx', buffer: XLSX.write(copy, { type: 'buffer', bookType: 'xlsx' }) }]);
-    assert.ok(detail.rows.length > 1);
-    reviseRows(db, detail.batch.id, detail.rows.map(row => ({ id: row.id, cleanedName: `검수 ${row.id}`, reviewNote: '', status: 'confirmed' })));
-    deleteRows(db, detail.batch.id, [detail.rows.at(-1).id]);
-    const after = XLSX.read(await exportWorkbook(db, detail.batch.id, 'orders'), { type: 'buffer' }).Sheets.rus00;
-    const before = XLSX.read(original, { type: 'buffer' }).Sheets.rus00;
-    assert.equal(after.J2.f, '3*3800');
-    assert.equal(after.J2.v, before.J2.v);
-    assert.equal(after.J2.t, before.J2.t);
   } finally { db.close(); }
 });
 

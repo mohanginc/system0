@@ -233,11 +233,12 @@ async function showDayOverview() {
 }
 function selectFiles(next) {
   const invalid = next.filter((file) => !/\.(xlsx|xls)$/i.test(file.name));
-  if (invalid.length) { message('.xls 또는 .xlsx 파일을 선택하세요.', true); return; }
+  if (invalid.length) { message('.xls 또는 .xlsx 파일을 선택하세요.', true); return false; }
   files = next; $('file-list').replaceChildren();
+  $('import-button').hidden = true;
   if (!files.length) $('file-list').textContent = '선택한 파일이 없습니다.';
   else { const count = document.createElement('strong'); count.textContent = `${files.length}개 파일 선택`; $('file-list').append(count, document.createTextNode(files.map((file) => file.name).join(', '))); }
-  message(''); updateControls();
+  message(''); updateControls(); return true;
 }
 function canLeave() { return !hasChanges() || window.confirm('저장하지 않은 수정·삭제 내용이 있습니다. 저장하지 않고 이동하시겠습니까?'); }
 function deleteItems(targets) {
@@ -284,19 +285,24 @@ $('batch-date').addEventListener('change', async () => {
   setBusy(true); clearWorkspace();
   try { await loadHistory(); await showDayOverview(); } catch (error) { message(error.message, true); } finally { setBusy(false); }
 });
-$('files').addEventListener('change', (event) => selectFiles([...event.target.files]));
+$('files').addEventListener('change', (event) => {
+  const next = [...event.target.files]; event.target.value = ''; importFiles(next);
+});
 for (const event of ['dragenter', 'dragover']) $('dropzone').addEventListener(event, (e) => { e.preventDefault(); if (!busy) $('dropzone').classList.add('dragging'); });
 for (const event of ['dragleave', 'drop']) $('dropzone').addEventListener(event, (e) => { e.preventDefault(); $('dropzone').classList.remove('dragging'); });
-$('dropzone').addEventListener('drop', (event) => { if (!busy) selectFiles([...event.dataTransfer.files]); });
-$('import-button').addEventListener('click', async () => {
-  if (!canLeave()) return;
+$('dropzone').addEventListener('drop', (event) => importFiles([...event.dataTransfer.files]));
+async function importFiles(next = files) {
+  if (busy || current?.batch.running || !next.length || !selectFiles(next)) return;
+  if (!canLeave()) { selectFiles([]); return; }
   const data = new FormData(); files.forEach((file) => data.append('files', file)); setBusy(true); message('파일을 불러오는 중입니다.');
   try {
-    const detail = await api('/api/import', { method: 'POST', body: data }); applyDetail(detail); await loadHistory();
+    const detail = await api('/api/import', { method: 'POST', body: data }); applyDetail(detail);
     selectFiles([]); $('files').value = ''; message(`파일 ${detail.batch.fileCount}개에서 주문 ${detail.rows.length.toLocaleString()}행을 불러왔습니다.`);
     $('workspace').scrollIntoView({ behavior: 'smooth', block: 'start' });
-  } catch (error) { message(error.message, true); } finally { setBusy(false); }
-});
+    try { await loadHistory(); } catch (error) { message(`파일은 불러왔지만 작업 목록을 갱신하지 못했습니다. ${error.message}`, true); }
+  } catch (error) { $('import-button').hidden = false; message(error.message, true); } finally { setBusy(false); }
+}
+$('import-button').addEventListener('click', () => importFiles());
 async function openBatch(id) {
   if (!id || !canLeave()) { $('batch-select').value = current ? String(current.batch.id) : ''; return; }
   setBusy(true); message('');

@@ -57,8 +57,26 @@ function Assert-Preserved {
 try {
     & (Join-Path $taskRoot 'installer\build-patch.ps1') -OutputFile $taskPatch
     $taskBcryptFiles = @('node_modules\bcryptjs\index.js', 'node_modules\bcryptjs\package.json', 'node_modules\bcryptjs\LICENSE')
+    $taskCryptoPackages = @('officecrypto-tool', 'cfb', 'adler-32', 'crc-32', 'crypto-js', 'xml2js', 'sax', 'xmlbuilder')
+    $taskCryptoFiles = @()
+    foreach ($taskPackageName in $taskCryptoPackages) {
+        $taskPackageRoot = Join-Path $taskRoot ('node_modules\' + $taskPackageName)
+        $taskRuntimePattern = switch ($taskPackageName) {
+            'officecrypto-tool' { '^(index\.js|src/.+\.js)$' }
+            'cfb' { '^cfb\.js$' }
+            'adler-32' { '^adler32\.js$' }
+            'crc-32' { '^crc32\.js$' }
+            'crypto-js' { '^(?!crypto-js\.js$)[^/]+\.js$' }
+            'xml2js' { '^lib/(?!xml2js\.bc\.js$).+\.js$' }
+            default { '^lib/.+\.js$' }
+        }
+        $taskCryptoFiles += Get-ChildItem -LiteralPath $taskPackageRoot -Recurse -File | Where-Object {
+            $relative = $_.FullName.Substring($taskPackageRoot.Length + 1).Replace('\', '/')
+            $relative -match '^(package\.json|LICENSE(?:\.md)?)$' -or $relative -match $taskRuntimePattern
+        } | ForEach-Object { $_.FullName.Substring($taskRoot.Length + 1) }
+    }
     $taskFiles = @('server.mjs', 'lib\database.mjs', 'lib\naming.mjs', 'lib\llm.mjs', 'lib\shipping.mjs',
-        'lib\naver.mjs', 'lib\shipping-preview.mjs', 'prompts\product-names.md') + $taskBcryptFiles
+        'lib\naver.mjs', 'lib\shipping-preview.mjs', 'lib\invoices.mjs', 'prompts\product-names.md') + $taskBcryptFiles + $taskCryptoFiles
     $taskFiles += Get-ChildItem -LiteralPath (Join-Path $taskRoot 'public') -Recurse -File |
         Where-Object { $_.Extension -in @('.html', '.css', '.js', '.svg', '.png', '.jpg', '.jpeg', '.webp', '.ico') } |
         ForEach-Object { $_.FullName.Substring($taskRoot.Length + 1) }
@@ -87,6 +105,9 @@ try {
     }
     if (Test-Path -LiteralPath (Join-Path $taskApp 'lib\llm.mjs')) { throw '새 파일 생성 fixture 준비 실패' }
     if (Test-Path -LiteralPath (Join-Path $taskModules 'bcryptjs')) { throw 'bcryptjs는 패치 전에 존재하면 안 됩니다.' }
+    foreach ($taskPackageName in $taskCryptoPackages) {
+        if (Test-Path -LiteralPath (Join-Path $taskModules $taskPackageName)) { throw '암호화 의존성은 패치 전에 존재하면 안 됩니다.' }
+    }
     $taskHelper = Join-Path $taskCheck 'fixture.mjs'
     $taskReady = Join-Path $taskCheck 'ready.json'
     $taskStop = Join-Path $taskCheck 'stop'
@@ -157,7 +178,7 @@ try {
 
     [System.IO.File]::WriteAllText((Join-Path $taskApp 'lib\database.mjs'), '// rollback database marker')
     Remove-Item -LiteralPath (Join-Path $taskApp 'lib\llm.mjs') -Force
-    foreach ($file in $taskBcryptFiles) { Remove-Item -LiteralPath (Join-Path $taskApp $file) -Force }
+    foreach ($file in @($taskBcryptFiles + $taskCryptoFiles + 'lib\invoices.mjs')) { Remove-Item -LiteralPath (Join-Path $taskApp $file) -Force }
     $taskBefore = @{}
     foreach ($file in $taskExpected.Keys) {
         $target = Join-Path $taskApp $file
@@ -203,7 +224,7 @@ try {
         throw '검증용 node_modules는 일반 폴더여야 합니다.'
     }
     foreach ($dependency in Get-ChildItem -LiteralPath (Join-Path $taskRoot 'node_modules') -Directory -Force) {
-        if ($dependency.Name -in @('bcryptjs', '.bin')) { continue }
+        if ($dependency.Name -in (@('bcryptjs', '.bin') + $taskCryptoPackages)) { continue }
         $link = Join-Path $taskModules $dependency.Name
         New-Item -ItemType Junction -Path $link -Target $dependency.FullName | Out-Null
         $taskLinks += $link
@@ -213,9 +234,11 @@ try {
 import assert from 'node:assert/strict';
 import path from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
-import { readdirSync, realpathSync } from 'node:fs';
+import { readdirSync, realpathSync, lstatSync } from 'node:fs';
+import { createRequire } from 'node:module';
 import * as XLSX from 'xlsx';
 import { hashSync, compareSync } from 'bcryptjs';
+import officeCrypto from 'officecrypto-tool';
 const [installed,data] = process.argv.slice(2);
 const bcryptRoot = path.join(installed,'node_modules','bcryptjs');
 assert.deepEqual(readdirSync(bcryptRoot).sort(),['LICENSE','index.js','package.json'].sort());
@@ -223,6 +246,19 @@ assert.equal(realpathSync(fileURLToPath(import.meta.resolve('bcryptjs'))),realpa
 const hash = hashSync('isolated-patch-fixture','$2b$04$abcdefghijklmnopqrstuu');
 assert.ok(compareSync('isolated-patch-fixture',hash));
 assert.equal(compareSync('different',hash),false);
+const cryptoPackages = ['officecrypto-tool','cfb','adler-32','crc-32','crypto-js','xml2js','sax','xmlbuilder'];
+const installedRequire = createRequire(import.meta.url);
+for (const name of cryptoPackages) {
+  const root = path.join(installed,'node_modules',name);
+  assert.equal(lstatSync(root).isSymbolicLink(),false,name+' must be actual patched files');
+  assert.ok(realpathSync(installedRequire.resolve(name)).startsWith(realpathSync(root)+path.sep),name+' resolves inside patched installation');
+  const requireFromPackage = createRequire(path.join(root,'package.json'));
+  const info = requireFromPackage('./package.json');
+  for (const dependency of Object.keys(info.dependencies || {})) {
+    assert.ok(cryptoPackages.includes(dependency));
+    assert.ok(realpathSync(requireFromPackage.resolve(dependency)).startsWith(realpathSync(path.join(installed,'node_modules',dependency))+path.sep));
+  }
+}
 process.env.SYSTEM0_ENV_FILE = path.join(data,'.env');
 const {createApp} = await import(pathToFileURL(path.join(installed,'server.mjs')).href);
 const {namingVersion} = await import(pathToFileURL(path.join(installed,'lib/naming.mjs')).href);
@@ -236,7 +272,10 @@ const app = createApp({databasePath:path.join(data,'system0.sqlite'),model:'fixt
       {productOrderId:'202610170000000012',orderId:'202610170000000001',originalName:'미리보기 전용 상품',
         productName:'미리보기 전용 상품',optionName:'옵션 B',quantity:2,recipient:'모의 신규 수취인',phone:'010-1111-2222',
         address:'서울 강남구 테헤란로 123 (역삼동, 비공개빌딩) 101호'},
-    ]:[]})},
+    ]:[]}),queryProductOrders:async ids=>ids.map(productOrderId=>({productOrderId,orderId:'202610220000000099',
+      status:'DELIVERING',remainQuantity:1,trackingNumber:'001234567890',deliveryCompanyCode:'KGB',
+      recipient:'송장 모의 수취인',phone:'010-0000-0000',address:'서울 강남구 테스트로 1',detailAddress:'101호',
+      claimStatus:'',isWrongTrackingNumber:false,deliveryStatus:'DELIVERING',deliveryMethod:'DELIVERY'}))},
   client:{responses:{create:async request => {
     const input = JSON.parse(request.input);
     if (input.every(row=>row.originalName === '미리보기 전용 상품')) {
@@ -291,7 +330,8 @@ try {
   assert.deepEqual(XLSX.utils.sheet_to_json(workbook.Sheets['주문'],{header:1,raw:true}),
     [['상품명','옵션명','수량'],['새 지침 모의 명칭','면100수 새싹',1],['새 지침 모의 명칭','면100수 새싹',2]]);
   for (const resource of ['/','/app.js','/intro.js','/intro.css','/assets/babestellar-logo.png','/assets/intro-night-sky.png',
-    '/llm-usage.html','/llm-usage.js','/llm-usage.css','/shipping-board.html','/shipping-board.js','/shipping-board.css']) {
+    '/llm-usage.html','/llm-usage.js','/llm-usage.css','/shipping-board.html','/shipping-board.js','/shipping-board.css',
+    '/invoices.html','/invoices.js','/invoices.css']) {
     const result = await fetch(base+resource); assert.equal(result.status,200,resource);
     assert.ok((await result.arrayBuffer()).byteLength > 0);
   }
@@ -348,7 +388,53 @@ try {
   assert.deepEqual(orderSnapshot(),beforePreview);
   const finalUsage = await (await fetch(base+'/api/llm/usage?from='+date+'&to='+date)).json();
   assert.deepEqual(finalUsage.totals,{calls:2,succeeded:2,failed:0,running:0});
-  console.log('Patched installation API passed: three-file local bcrypt ESM, legacy migration, prompt refresh/reuse, XLSX export, pages, read-only new-order preview and empty refresh; mock AI/Naver only.');
+  const excel = rows=>{
+    const workbook=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(workbook,XLSX.utils.aoa_to_sheet(rows),'주문');
+    return XLSX.write(workbook,{type:'buffer',bookType:'xlsx'});
+  };
+  const invoiceSource=excel([['원상품명','주문번호','체결번호','송화주','전화번호','주소','수량','쇼핑몰'],
+    ['송장 테스트 쿠션','000001','202610220000000099','송장 모의 수취인','010-0000-0000','서울 강남구 테스트로 1 101호',1,'네이버'],
+    ['번호 없는 출고','','','송장 미매칭 수취인','010-0000-0000','서울 강남구 테스트로 1 101호',1,'네이버']]);
+  const sourceForm=new FormData(); sourceForm.append('files',new Blob([invoiceSource]),'확인한 주문.xlsx');
+  const sourceResponse=await fetch(base+'/api/import',{method:'POST',body:sourceForm}); assert.equal(sourceResponse.status,201);
+  const source=await sourceResponse.json();
+  const sourceBeforeInvoice=orderSnapshot();
+  const invoiceNaver=excel([['상품주문번호','주문번호','상품명','수량','수취인명','수취인연락처1','통합배송지','주문상태'],
+    ['202610220000000021','202610220000000099','송장 테스트 쿠션',1,'송장 모의 수취인','010-0000-0000','서울 강남구 테스트로 1 101호','PAYED']]);
+  const fixturePassword='isolated-file-password';
+  const encrypted=officeCrypto.encrypt(invoiceNaver,{password:fixturePassword});
+  const courier=excel([['운송장번호','주문번호','차수','물품명'],
+    ['001234567890','000001',1,'송장 테스트 쿠션'],['009999999999','',1,'송장에만 있는 행']]);
+  const invoiceForm=entered=>{
+    const form=new FormData(); form.append('naverFiles',new Blob([encrypted]),'암호 주문.xlsx');
+    form.append('courierFiles',new Blob([courier]),'택배사.xlsx');form.append('deliveryCompanyCode','KGB');
+    form.append('batchIds',JSON.stringify([source.batch.id]));form.append('naverPassword',entered);return form;
+  };
+  assert.equal((await fetch(base+'/api/invoices/import',{method:'POST',body:invoiceForm('wrong-fixture-password')})).status,400);
+  const matchedResponse=await fetch(base+'/api/invoices/import',{method:'POST',body:invoiceForm(fixturePassword)});
+  assert.equal(matchedResponse.status,201);const matched=await matchedResponse.json();
+  assert.equal(matched.orders.length,2);assert.equal(matched.items.length,1);assert.equal(matched.unmatchedCouriers.length,1);
+  assert.ok(!JSON.stringify(matched).includes(fixturePassword));
+  assert.ok(Buffer.from(db.prepare("SELECT content FROM invoice_files WHERE run_id=? AND kind='naver'").get(matched.run.id).content).equals(encrypted));
+  const required=matched.issues.filter(issue=>issue.reviewRequired);assert.ok(required.length);
+  assert.ok(matched.issues.some(issue=>!issue.reviewRequired));
+  const review=await fetch(base+'/api/invoices/'+matched.run.id+'/items',{method:'PATCH',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({issueResolutions:required.map(issue=>({key:issue.key}))})});
+  assert.equal(review.status,200);const reviewed=await review.json();assert.equal(reviewed.summary.issues,0);
+  assert.ok(reviewed.issues.filter(issue=>!issue.reviewRequired).every(issue=>!issue.resolved && issue.note===''));
+  const invoiceExport=await fetch(base+'/api/invoices/'+matched.run.id+'/export');assert.equal(invoiceExport.status,200);
+  const generatedBytes=Buffer.from(await invoiceExport.arrayBuffer());const dispatch=XLSX.read(generatedBytes,{type:'buffer'});
+  assert.deepEqual(XLSX.utils.sheet_to_json(dispatch.Sheets['발송처리'],{header:1,raw:true}),
+    [['상품주문번호','배송방법','택배사','송장번호'],['202610220000000021','택배,등기,소포','로젠택배','001234567890']]);
+  const checked=await fetch(base+'/api/invoices/'+matched.run.id+'/check',{method:'POST'});assert.equal(checked.status,200);
+  assert.equal((await checked.json()).items[0].registrationState,'complete');
+  assert.equal((await fetch(base+'/api/invoices/'+matched.run.id+'/export')).status,400);
+  const copied=await fetch(base+'/api/invoices/'+matched.run.id+'/download');assert.equal(copied.status,200);
+  assert.ok(Buffer.from(await copied.arrayBuffer()).equals(generatedBytes));
+  const resumed=await (await fetch(base+'/api/invoices/latest?date='+date)).json();
+  assert.equal(resumed.invoice.run.id,matched.run.id);assert.equal(resumed.invoice.run.savedFileAvailable,true);
+  assert.deepEqual(orderSnapshot(),sourceBeforeInvoice);assert.equal(requests,1);assert.equal(previewRequests,1);
+  console.log('Patched installation API passed: actual local bcrypt/Office crypto closure, legacy migration, prompt reuse, XLSX/pages/preview, encrypted invoice matching, checkbox-only review and exact saved-file download after mock registration.');
 } finally { await new Promise(resolve=>server.close(resolve)); db.close(); }
 '@ | Set-Content -LiteralPath $taskApiCheck -Encoding utf8
     & (Join-Path $taskApp 'runtime\node.exe') $taskApiCheck $taskApp $taskData

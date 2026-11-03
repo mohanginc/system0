@@ -1,11 +1,33 @@
 ﻿param([string]$OutputFile)
 $ErrorActionPreference = 'Stop'
 $taskRoot = Split-Path -Parent $PSScriptRoot
-if (-not $OutputFile) { $OutputFile = Join-Path $taskRoot 'outputs\installer\system0-patch-new-orders.cmd' }
+if (-not $OutputFile) { $OutputFile = Join-Path $taskRoot 'outputs\installer\system0-patch-invoices.cmd' }
 $OutputFile = [System.IO.Path]::GetFullPath($OutputFile)
 $taskFiles = @('server.mjs', 'lib/database.mjs', 'lib/naming.mjs', 'lib/llm.mjs', 'lib/shipping.mjs',
-    'lib/naver.mjs', 'lib/shipping-preview.mjs', 'prompts/product-names.md',
+    'lib/naver.mjs', 'lib/shipping-preview.mjs', 'lib/invoices.mjs', 'prompts/product-names.md',
     'node_modules/bcryptjs/index.js', 'node_modules/bcryptjs/package.json', 'node_modules/bcryptjs/LICENSE')
+$taskCryptoPackages = @('officecrypto-tool', 'cfb', 'adler-32', 'crc-32', 'crypto-js', 'xml2js', 'sax', 'xmlbuilder')
+foreach ($taskPackageName in $taskCryptoPackages) {
+    $taskPackageRoot = Join-Path $taskRoot ('node_modules\' + $taskPackageName)
+    if (Test-Path -LiteralPath (Join-Path $taskPackageRoot 'node_modules')) { throw '암호화 의존성의 중첩 버전을 확인해 주세요.' }
+    $taskPackageInfo = Get-Content -LiteralPath (Join-Path $taskPackageRoot 'package.json') -Raw | ConvertFrom-Json
+    foreach ($taskDependency in $taskPackageInfo.dependencies.PSObject.Properties.Name) {
+        if ($taskDependency -and $taskDependency -notin $taskCryptoPackages) { throw ('추가 암호화 의존성을 확인해 주세요: ' + $taskDependency) }
+    }
+    $taskRuntimePattern = switch ($taskPackageName) {
+        'officecrypto-tool' { '^(index\.js|src/.+\.js)$' }
+        'cfb' { '^cfb\.js$' }
+        'adler-32' { '^adler32\.js$' }
+        'crc-32' { '^crc32\.js$' }
+        'crypto-js' { '^(?!crypto-js\.js$)[^/]+\.js$' }
+        'xml2js' { '^lib/(?!xml2js\.bc\.js$).+\.js$' }
+        default { '^lib/.+\.js$' }
+    }
+    $taskFiles += Get-ChildItem -LiteralPath $taskPackageRoot -Recurse -File | Where-Object {
+        $relative = $_.FullName.Substring($taskPackageRoot.Length + 1).Replace('\', '/')
+        $relative -match '^(package\.json|LICENSE(?:\.md)?)$' -or $relative -match $taskRuntimePattern
+    } | ForEach-Object { $_.FullName.Substring($taskRoot.Length + 1).Replace('\', '/') }
+}
 $taskFiles += Get-ChildItem -LiteralPath (Join-Path $taskRoot 'public') -Recurse -File |
     Where-Object { $_.Extension -in @('.html', '.css', '.js', '.svg', '.png', '.jpg', '.jpeg', '.webp', '.ico') } |
     ForEach-Object { $_.FullName.Substring($taskRoot.Length + 1).Replace('\', '/') }
@@ -43,7 +65,7 @@ try {
     $stage = Join-Path $app ('.patch-' + [Guid]::NewGuid().ToString('N'))
     $seen = @{}
     foreach ($file in $payload) {
-        if ($file.path -notmatch '^(server\.mjs|lib/(database|naming|llm|shipping|naver|shipping-preview)\.mjs|prompts/product-names\.md|node_modules/bcryptjs/(index\.js|package\.json|LICENSE)|public/[^:]+\.(html|css|js|svg|png|jpg|jpeg|webp|ico))$' -or
+        if ($file.path -notmatch '^(server\.mjs|lib/(database|naming|llm|shipping|naver|shipping-preview|invoices)\.mjs|prompts/product-names\.md|node_modules/bcryptjs/(index\.js|package\.json|LICENSE)|node_modules/(officecrypto-tool|cfb|adler-32|crc-32|crypto-js|xml2js|sax|xmlbuilder)/([^:]+\.(js|json)|LICENSE(\.md)?)|public/[^:]+\.(html|css|js|svg|png|jpg|jpeg|webp|ico))$' -or
             $file.path.Split('/') -contains '..' -or $file.path.Contains('\') -or $seen.ContainsKey($file.path)) {
             throw '패치 파일 경로를 확인할 수 없습니다.'
         }

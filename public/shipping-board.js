@@ -84,7 +84,7 @@ function renderGroup(group, open, preview = false) {
   const summary = element('summary'), name = element('div', undefined, 'shipment-name');
   name.append(element('h2', group.name || '상품명 미정리'));
   const status = group.needsAttention ? (preview ? '상품명 확인이 필요합니다. 상세 목록의 사유를 확인하세요.' : '출고 정보 확인이 필요합니다.') : group.unprepared ? '상품명 정리가 필요합니다.'
-    : complete ? '송장 입력 완료' : invoiceState(group.invoiceState) === 'pending' ? '송장 미입력 있음' : '';
+    : complete ? '몰 송장 등록 확인 완료' : invoiceState(group.invoiceState) === 'pending' ? '송장 등록 확인 필요' : '';
   if (status) name.append(element('span', status, 'item-status'));
   const quantity = element('div', undefined, 'bundle-number');
   quantity.append(element('strong', count(group.count)), element('span', preview ? '개' : '묶음'));
@@ -118,8 +118,8 @@ function renderBoard(data) {
   $('board-title').textContent = `${Number(month)}월 ${Number(day)}일 출고 목록`;
   for (const [id, key] of [['bundle-count', 'bundleCount'], ['group-count', 'groupCount'], ['unprepared-count', 'unpreparedCount']]) $(id).textContent = count(data.summary[key]);
   const state = invoiceState(data.invoiceState);
-  $('invoice-status').textContent = state === 'complete' ? '송장 입력 완료' : state === 'pending' ? '송장 미입력 있음' : '송장 정보 연결 전';
-  $('invoice-description').textContent = state === 'unavailable' ? '현재 색상은 송장 완료 여부를 나타내지 않습니다.' : '모든 송장이 입력된 항목은 회색으로 표시합니다.';
+  $('invoice-status').textContent = state === 'complete' ? '몰 송장 등록 확인 완료' : state === 'pending' ? '송장 등록 확인 필요' : '송장 정보 연결 전';
+  $('invoice-description').textContent = state === 'unavailable' ? '송장 처리 화면에서 파일을 연결하고 등록 상태를 확인하세요.' : '몰 등록이 모두 확인된 항목은 회색입니다. 실물 상차 여부와는 별개입니다.';
   const notices = document.createDocumentFragment();
   if (data.summary.duplicateCount) notices.append(element('li', `같은 출고번호로 다시 올린 ${count(data.summary.duplicateCount)}행은 중복 집계에서 제외했습니다.`));
   for (const issue of data.issues || []) notices.append(element('li', issue.message));
