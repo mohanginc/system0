@@ -111,6 +111,8 @@ main.invoice-layout.history-collapsed { display: grid; grid-template-columns: 18
 .item-review { margin-top: 6px; }
 .invoice-table.preview-table { min-width: 850px; }
 .tracking-select { font-size: 11px; width: 100%; }
+.tracking-choice { display: flex; align-items: center; gap: 7px; cursor: pointer; }
+.tracking-choice-input { flex-shrink: 0; margin: 0; }
 .invoice-table tr.is-held { background: #fffaf1; }
 .invoice-table tr.is-excluded { background: #f7f7f5; }
 .invoice-table tr.number-problem { background: #fcebec; }

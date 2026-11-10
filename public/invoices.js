@@ -27,12 +27,15 @@ function draftIssue(issue) { return { ...issue, ...issueChanges.get(issue.key) }
 function scopeUnavailable() { return current && (current.scopeRequired || !Array.isArray(current.orders)); }
 function downloadItems() { return (current?.items || []).filter(item => item.decision === 'include' && item.registrationState !== 'complete' && !item.sourceRegistered); }
 function storedDownloadMode() { return current?.run.savedFileAvailable ? 'saved' : 'rebuild'; }
-function primaryDownloadMode() { return current?.run.generatedAt && !downloadItems().length ? storedDownloadMode() : 'export'; }
+function primaryDownloadMode() {
+  if (current?.run.generatedAt && current.items.some(item => item.trackingSelection)) return 'rebuild';
+  return current?.run.generatedAt && !downloadItems().length ? storedDownloadMode() : 'export';
+}
+function blockingKeys(item) { return item.blockingIssueKeys || (item.issues || []).filter(key => current.issues.some(issue => issue.key === key && issue.blocking)); }
 function refreshControls() {
   const dirty = isDirty(), unresolved = (current?.issues || []).filter(issue => issue.reviewRequired !== false && !issue.resolved).length;
   const exportable = downloadItems().length;
-  const blocked = (current?.items || []).some(item => item.decision === 'include' && (item.registrationState === 'conflict'
-    || (current.issues || []).some(issue => issue.blocking && item.issues.includes(issue.key))));
+  const blocked = (current?.items || []).some(item => item.decision === 'include' && (item.registrationState === 'conflict' || blockingKeys(item).length));
   const mode = primaryDownloadMode(), included = (current?.items || []).filter(item => item.decision === 'include').length;
   const needsReview = unresolved > 0 || blocked || scopeUnavailable() || current?.rematchRequired;
   for (const control of document.querySelectorAll('button, input, select, textarea')) control.disabled = busy || control.dataset.locked === 'true';
@@ -40,7 +43,7 @@ function refreshControls() {
   $('save-button').disabled = busy || !dirty || scopeUnavailable() || current?.rematchRequired;
   $('export-button').disabled = busy || !current || dirty || (mode !== 'saved' && (needsReview || !(mode === 'rebuild' ? included : exportable)));
   $('export-button').textContent = mode === 'saved' ? '생성한 엑셀 다시 받기' : mode === 'rebuild' ? '현재 매칭 엑셀 받기' : '네이버 업로드용 엑셀';
-  $('redownload-button').hidden = !current?.run.generatedAt || mode !== 'export';
+  $('redownload-button').hidden = !current?.run.generatedAt || mode === 'saved' || (mode === 'rebuild' && !current.run.savedFileAvailable);
   $('redownload-button').disabled = busy || dirty || (storedDownloadMode() !== 'saved' && (needsReview || !included));
   $('redownload-button').textContent = storedDownloadMode() === 'saved' ? '생성한 엑셀 다시 받기' : '현재 매칭 엑셀 받기';
   $('check-button').disabled = busy || !current || dirty || (!current.items.length && !current.outsideOrders?.length) || scopeUnavailable() || current.rematchRequired;
@@ -58,7 +61,7 @@ function refreshControls() {
     : current.rematchRequired ? '다른 날짜의 주문까지 확인하려면 같은 ①·③ 파일을 다시 선택해 매칭하세요.'
     : unresolved ? '주문 행의 경고를 확인한 뒤 검토 내용을 저장하세요. 메모는 선택 사항입니다.'
     : blocked ? '연결 근거가 부족하거나 등록 송장이 다른 포함 항목을 보류·제외해 주세요.'
-    : mode === 'rebuild' ? `이전 생성 파일은 보관되지 않아 현재 저장된 매칭 ${count(included)}건으로 다시 만듭니다.\n등록 완료 건도 포함됩니다.`
+    : mode === 'rebuild' ? `현재 매칭 ${count(included)}건으로 새 엑셀을 만듭니다. 등록 완료 건도 포함됩니다.`
     : !exportable ? '새로 엑셀로 만들 상품주문이 없습니다. 등록 완료·보류·제외 상태를 확인하세요.'
     : `네이버 상품주문 ${count(exportable)}건 · 보류·제외·등록 확인 완료 건은 포함하지 않습니다.\n다운로드만으로 등록 완료가 되지 않습니다.`;
 }
@@ -189,8 +192,9 @@ async function loadHistory() {
 }
 function saveItemDraft(item, fields) {
   const key = String(item.id), next = { ...draftItem(item), ...fields };
-  if (next.decision === item.decision && (next.note || '') === (item.note || '')) itemChanges.delete(key);
-  else itemChanges.set(key, { id: item.id, decision: next.decision, note: next.note || '' });
+  const selectedTrackingNumber = next.selectedTrackingNumber === item.trackingSelection?.trackingNumber ? undefined : next.selectedTrackingNumber;
+  if (next.decision === item.decision && (next.note || '') === (item.note || '') && !selectedTrackingNumber) itemChanges.delete(key);
+  else itemChanges.set(key, { id: item.id, decision: next.decision, note: next.note || '', ...(selectedTrackingNumber ? { selectedTrackingNumber } : {}) });
   for (const control of document.querySelectorAll('[data-item-id]')) if (control.dataset.itemId === key && control !== document.activeElement) control.value = control.classList.contains('item-decision') ? next.decision : next.note || '';
   refreshControls();
 }
@@ -252,7 +256,9 @@ function appendWarnings(target, issues) {
   for (const group of groups.values()) target.append(warningReview(group));
 }
 function warningsForOrder(order) {
-  return (current.issues || []).filter(issue => (order.issues || []).includes(issue.key));
+  const linked = current.items.filter(item => order.itemIds.includes(item.id));
+  return (current.issues || []).filter(issue => (order.issues || []).includes(issue.key)).map(issue => ({ ...issue,
+    blocking: issue.blocking && (!linked.length || linked.some(item => blockingKeys(item).includes(issue.key))) }));
 }
 function warningsForCourier(courier) {
   const source = courier.source || courier;
@@ -328,6 +334,28 @@ function shipmentHistory(items) {
   }
   return history;
 }
+function trackingChoices(order, linked) {
+  const group = element('div');
+  for (const number of order.trackingNumbers) {
+    if (order.trackingNumbers.length < 2 || !linked.length) { group.append(element('strong', number)); continue; }
+    const label = element('label', undefined, 'tracking-choice'), checkbox = element('input');
+    checkbox.type = 'checkbox'; checkbox.className = 'tracking-choice-input';
+    checkbox.setAttribute('aria-label', `적용 송장 ${number}`);
+    const selectable = linked.every(item => item.physicalShipments?.some(shipment => shipment.trackingNumber === number && shipment.valid === true));
+    checkbox.dataset.locked = String(!selectable); checkbox.disabled = busy || !selectable;
+    checkbox.checked = linked.every(item => (draftItem(item).selectedTrackingNumber || item.trackingSelection?.trackingNumber) === number);
+    checkbox.addEventListener('change', () => {
+      for (const item of linked) {
+        const canInclude = item.registrationState !== 'conflict' && !item.sourceRegistered && blockingKeys(item).every(key => current.issues.some(issue => issue.key === key && ['legacy_conflict', 'courier_conflict'].includes(issue.kind)));
+        saveItemDraft(item, { selectedTrackingNumber: checkbox.checked ? number : undefined,
+          decision: checkbox.checked && canInclude ? 'include' : item.decision });
+      }
+      renderItems(); refreshControls();
+    });
+    label.append(checkbox, element('strong', number)); group.append(label);
+  }
+  return group;
+}
 function displayedOrders() {
   const orders = scopeUnavailable() ? previewOrders : current?.orders || previewOrders;
   return [...orders.filter(order => order.sourceType === 'naver_only'), ...orders.filter(order => order.sourceType !== 'naver_only')];
@@ -356,7 +384,7 @@ function renderItems() {
     product.append(element('small', `${order.sourceType === 'naver_only' ? '① ' : '② '}${location}`, 'source-location'));
     const details = element('details'); details.append(element('summary', '주문 연결 근거'), element('p', [...new Set(linked.map(sourceDescription))].filter(Boolean).join('\n') || (order.internalId ? `내부 출고번호: ${order.internalId}` : order.reason || '연결된 자료가 없습니다.'))); product.append(details);
     const tracking = element('td');
-    for (const number of order.trackingNumbers) tracking.append(element('strong', number));
+    tracking.append(trackingChoices(order, linked));
     if (!order.trackingNumbers.length) tracking.append(element('span', order.state === 'not_matched' ? '송장 매칭 전' : '대응 송장 없음'));
     if (order.courierRows?.length) {
       const sources = element('details'); sources.append(element('summary', '③ 송장 원본 위치'));
