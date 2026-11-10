@@ -303,3 +303,29 @@ test('같은 작업의 늦은 이전 조회는 더 최근 조회 결과를 성�
     assert.deepEqual(after.outsideOrders[0].evidence, current.evidence);
   });
 });
+
+test('다른 날짜에 같은 주문을 다시 조회하면 예전 원본의 등록 완료도 무효화한다', async t => {
+  for (const outcome of ['pending', 'canceled', 'failure']) await t.test(outcome, async t => {
+    const scenario = smallScenario(), h = await boot(t, scenario), outside = scenario.manualOrders[0];
+    const first = await h.importInvoices();
+    assert.equal(first.outsideOrders[0].state, 'external_registered');
+    const current = { ...createWeekendScenario().days[2].orders[0], productOrderId: '2026110900000001', orderId: '2026110900010001', internalId: 'COPY-MONDAY-1' };
+    h.all.set(current.productOrderId, current);
+    const copied = await h.addSource(sourceFile([outside, current], '가상_월요일_동일주문.xlsx'), '2026-11-09');
+    h.state.detail = async ids => ids.map(id => registeredOrder(h.all.get(id), id !== outside.productOrderId ? {}
+      : outcome === 'canceled' ? { status: 'CANCELED', remainQuantity: 0, trackingNumber: '', deliveryCompanyCode: '' }
+        : { status: 'PAYED', deliveryStatus: '', trackingNumber: '', deliveryCompanyCode: '' }));
+    if (outcome === 'failure') h.state.lookup = async orderId => {
+      if (orderId === outside.orderId) throw new Error('가상 최신 조회 장애');
+      return [...h.all.values()].filter(order => order.orderId === orderId).map(order => order.productOrderId);
+    };
+    const second = await h.importInvoices({ date: '2026-11-09', naver: naverFile([current]), courier: courierFile([current]) });
+    assert.notEqual(second.run.id, first.run.id);
+    const newest = second.outsideOrders.find(row => row.rowId === copied.rows[0].id);
+    assert.equal(newest.state, outcome === 'failure' ? 'unknown' : outcome);
+    const older = await h.read(`/api/invoices/${first.run.id}`);
+    assert.equal(older.outsideOrders.find(row => row.rowId === first.outsideOrders[0].rowId).state, 'unknown');
+    assert.equal((await h.dayOrders(0)).find(row => row.rowId === first.outsideOrders[0].rowId).externalRegistration, false);
+    assert.ok(!older.outsideOrders.some(row => row.externalRegistration), '다른 날짜 복사본의 최신 조회가 오래된 등록 완료를 남기지 않습니다.');
+  });
+});

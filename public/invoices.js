@@ -10,7 +10,7 @@ const selectedBatches = new Map();
 const itemChanges = new Map(), issueChanges = new Map();
 const registrationLabels = { unchecked: '등록 미조회', pending: '등록 미확인', complete: '등록 확인 완료', conflict: '송장 불일치' };
 const historyRegistrationLabels = { unchecked: '네이버 등록 미조회', pending: '네이버 미등록', partial: '네이버 일부 등록', complete: '네이버 등록 확인 완료', conflict: '네이버 송장 확인 필요' };
-const outsideLabels = { external_registered: '네이버 등록 확인 완료', pending: '발송대기 · 파일 누락 가능성', canceled: '취소 확인', returned: '반품 확인', attention: '일부 등록·상태 확인 필요', unknown: '등록 여부 미확인' };
+const outsideLabels = { external_registered: '네이버 등록 확인 완료', pending: '발송대기 · 파일 누락 가능성', canceled: '취소 확인', returned: '반품 확인', attention: '일부 등록·상태 확인 필요', unknown: '등록 여부 미확인', naver_not_applicable: '네이버 조회 대상 아님' };
 
 function element(tag, text, className) {
   const node = document.createElement(tag);
@@ -399,10 +399,11 @@ function renderOutsideTarget() {
   for (const order of orders) states[order.state] = (states[order.state] || 0) + 1;
   $('outside-target-section').hidden = scopeUnavailable() || !orders.length;
   $('outside-target-count').textContent = `${count(orders.length)}행`;
-  const unverified = orders.length - ['external_registered', 'pending', 'canceled', 'returned', 'attention'].reduce((sum, state) => sum + (states[state] || 0), 0);
+  const unverified = orders.length - ['external_registered', 'pending', 'canceled', 'returned', 'attention', 'naver_not_applicable'].reduce((sum, state) => sum + (states[state] || 0), 0);
   $('outside-target-summary').textContent = [states.external_registered && `네이버 등록 확인 ${count(states.external_registered)}`,
     states.pending && `발송대기 ${count(states.pending)}`, states.canceled && `취소 ${count(states.canceled)}`,
     states.returned && `반품 ${count(states.returned)}`, states.attention && `상태 확인 필요 ${count(states.attention)}`,
+    states.naver_not_applicable && `네이버 조회 대상 아님 ${count(states.naver_not_applicable)}`,
     unverified && `미확인 ${count(unverified)}`].filter(Boolean).join(' · ');
   $('outside-target-summary').classList.toggle('needs-attention', Boolean(states.pending || states.attention || unverified));
   for (const group of orderGroups(orders)) {
