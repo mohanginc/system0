@@ -211,12 +211,16 @@ test('과거 조회 완료와 새 발송대기 파일이 모순되면 완료를 
   assert.equal(outputRows(await output.arrayBuffer()).length, 90);
   h.state.mode = 'conflict';
   const conflict = await h.request(`/api/invoices/${second.run.id}/check`, { method: 'POST' }); assert.equal(conflict.status, 200);
-  assert.equal((await conflict.json()).items.filter(item => item.registrationState === 'conflict').length, 1);
+  const conflicted = (await conflict.json()).items.filter(item => item.registrationState === 'conflict');
+  assert.equal(conflicted.length, 1);
   assert.equal((await h.request(`/api/invoices/${second.run.id}/export`)).status, 400);
   h.state.mode = 'failure';
   assert.equal((await h.request(`/api/invoices/${second.run.id}/check`, { method: 'POST' })).status, 400);
   const failed = await h.read(`/api/invoices/${second.run.id}`);
-  assert.ok(failed.items.every(item => !item.statusFresh && item.registrationState === 'unchecked'));
+  assert.ok(failed.items.every(item => !item.statusFresh && item.registrationState !== 'complete'));
+  assert.ok(failed.items.filter(item => item.id !== conflicted[0].id).every(item => item.registrationState === 'unchecked'));
+  assert.equal(failed.items.find(item => item.id === conflicted[0].id).registrationState, 'conflict', '조회 실패로 앞서 확인한 충돌을 지우지 않습니다.');
+  assert.equal((await h.request(`/api/invoices/${second.run.id}/export`)).status, 400);
 });
 
 test('등록 재조회가 성공해도 직원이 별도로 보류·제외한 결정과 검토 메모를 유지한다', async t => {

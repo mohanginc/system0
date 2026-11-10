@@ -248,3 +248,24 @@ test('진짜 동일 출고 수취 정보 변경·원본 삭제는 이전 완료�
     const rows = await h.day(batch.batch.id); assert.ok(rows.every(row => row.state !== 'complete'));
   });
 });
+
+test('구버전에서 검토 저장한 전체 근거 변경 경고도 현재 주문별로 다시 판단한다', async t => {
+  const saturday = [order('2026-11-07', 0), order('2026-11-07', 1)], monday = order('2026-11-09', 0);
+  const h = await boot(t, [...saturday, monday]);
+  const source = await h.addSource(saturday, '가상_토요일_저장본.xlsx', '2026-11-07T00:00:00Z');
+  const run = await h.importInvoice([...saturday, monday], [...saturday, monday], '구버전', '2026-11-09T01:00:00Z');
+  useLegacyContract(h.running.app.locals.db, run.run.id);
+  await h.addSource([monday], '가상_나중에추가.xlsx', '2026-11-09T02:00:00Z');
+  const db = h.running.app.locals.db, stored = JSON.parse(db.prepare('SELECT issues_json FROM invoice_runs WHERE id=?').get(run.run.id).issues_json);
+  stored.push({ key: hash(['source_changed', '', '', '']).slice(0, 24), kind: 'source_changed',
+    message: '연결 근거인 저장 주문이 바뀌었습니다. 현재 유효 주문으로 매칭을 다시 확인해 주세요.', blocking: true, resolved: true, note: '구버전 담당자 확인' });
+  db.prepare('UPDATE invoice_runs SET issues_json=? WHERE id=?').run(JSON.stringify(stored), run.run.id);
+  const detail = await h.read(`/api/invoices/${run.run.id}`);
+  assert.ok(!detail.issues.some(warning => warning.kind === 'source_changed' && !warning.productOrderId));
+  assert.equal(detail.issues.filter(warning => warning.kind === 'source_changed').length, 1);
+  assert.equal(detail.issues.find(warning => warning.kind === 'source_changed').productOrderId, monday.productOrderId);
+  assert.ok((await h.day(source.batch.id)).every(row => row.state === 'ready'));
+  const reviewed = await h.acknowledge(detail);
+  assert.ok(reviewed.issues.find(warning => warning.kind === 'source_changed').resolved, '현재 실제 충돌을 보류한 확인은 재조회에도 유지합니다.');
+  assert.equal(outputRows(await h.exportFile(run.run.id)).length, 2, '실제 충돌을 보류한 뒤 정상 주문만 출력할 수 있습니다.');
+});
