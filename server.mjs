@@ -14,8 +14,9 @@ import { listLlmPurposes, llmUsage } from './lib/llm.mjs';
 import { shippingBoard, shippingDates } from './lib/shipping.mjs';
 import { createNaverClient } from './lib/naver.mjs';
 import { previewShippingBoard } from './lib/shipping-preview.mjs';
-import { CARRIERS, unlockNaverFiles, importInvoiceFiles, listInvoiceRuns, listInvoiceDrafts, invoiceDetail, invoiceOrderSources, reviseInvoiceItems,
-  exportInvoices, downloadInvoices, latestInvoice, refreshInvoiceStatus, refreshOutsideInvoiceStatus } from './lib/invoices.mjs';
+import { CARRIERS, unlockNaverFiles, importInvoiceFiles, listInvoiceRuns, listInvoiceDrafts, reviseInvoiceItems,
+  exportInvoices, downloadInvoices, latestInvoice, refreshInvoiceStatus, refreshOutsideInvoiceStatus,
+  invoiceView, invoiceSourceView, invoiceDateRunIds, checkInvoiceDate } from './lib/invoices.mjs';
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 const envFile = process.env.SYSTEM0_ENV_FILE || path.join(projectRoot, '.env');
@@ -98,12 +99,24 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
   app.use('/api/invoices', (_request, response, next) => { response.set('Cache-Control', 'no-store'); next(); });
   app.get('/api/invoices/meta', (_request, response) => response.json({ carriers: CARRIERS }));
   app.get('/api/invoices/drafts', (request, response) => response.json({ drafts: listInvoiceDrafts(db, request.query.date) }));
-  app.get('/api/invoices/latest', (request, response) => response.json({ invoice: latestInvoice(db, request.query.date) }));
+  app.get('/api/invoices/latest', (request, response) => {
+    const detail = latestInvoice(db, request.query.date);
+    response.json({ invoice: detail ? invoiceView(db, detail.run.id) : null });
+  });
   app.get('/api/invoices/orders', (request, response) => {
     let batchIds;
     try { batchIds = JSON.parse(request.query.batchIds); }
     catch { throw new Error('조회할 확인한 주문 작업을 선택해 주세요.'); }
-    response.json(invoiceOrderSources(db, batchIds));
+    response.json(invoiceSourceView(db, batchIds));
+  });
+  app.post('/api/invoices/check-date', async (request, response) => {
+    if (!request.body || Object.keys(request.body).some(key => key !== 'date')) throw new Error('등록 상태를 확인할 날짜만 지정해 주세요.');
+    const date = request.body.date, runIds = invoiceDateRunIds(db, date);
+    if (!runIds.length) throw new Error('이 날짜와 연결된 송장 처리 내역이 없습니다.');
+    if (runIds.some(id => invoiceChecking.has(id))) return response.status(409).json({ error: '관련 송장 등록 상태를 확인 중입니다. 완료 후 다시 실행해 주세요.' });
+    for (const id of runIds) invoiceChecking.add(id);
+    try { response.json(await checkInvoiceDate(db, date, naver, runIds)); }
+    finally { for (const id of runIds) invoiceChecking.delete(id); }
   });
   app.get('/api/invoices', (request, response) => response.json({ runs: listInvoiceRuns(db, request.query.date) }));
   app.post('/api/invoices/import', invoiceUpload, async (request, response) => {
@@ -126,8 +139,8 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
     const detail = importInvoiceFiles(db, { naverFiles: preparedNaverFiles, courierFiles, carrier, batchIds, sourceDate, runningBatchIds: [...running] });
     invoiceChecking.add(detail.run.id);
     try {
-      response.status(201).json(!detail.run.outsideCheckedAt || detail.outsideOrders.some(order => !order.checkedAt)
-        ? await refreshOutsideInvoiceStatus(db, detail.run.id, naver) : detail);
+      if (!detail.run.outsideCheckedAt || detail.outsideOrders.some(order => !order.checkedAt)) await refreshOutsideInvoiceStatus(db, detail.run.id, naver);
+      response.status(201).json(invoiceView(db, detail.run.id));
     } finally { invoiceChecking.delete(detail.run.id); }
   });
   const ensureInvoice = (request, response, mutating = false) => {
@@ -143,11 +156,11 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
   };
   app.get('/api/invoices/:id', (request, response) => {
     const id = ensureInvoice(request, response);
-    if (id) response.json(invoiceDetail(db, id));
+    if (id) response.json(invoiceView(db, id));
   });
   app.patch('/api/invoices/:id/items', (request, response) => {
     const id = ensureInvoice(request, response, true);
-    if (id) response.json(reviseInvoiceItems(db, id, request.body));
+    if (id) { reviseInvoiceItems(db, id, request.body); response.json(invoiceView(db, id)); }
   });
   app.get('/api/invoices/:id/export', (request, response) => {
     const id = ensureInvoice(request, response, true);
@@ -174,9 +187,9 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
     try {
       let mainError;
       try { await refreshInvoiceStatus(db, id, naver); } catch (error) { mainError = error; }
-      const detail = await refreshOutsideInvoiceStatus(db, id, naver);
+      await refreshOutsideInvoiceStatus(db, id, naver);
       if (mainError) throw mainError;
-      response.json(detail);
+      response.json(invoiceView(db, id));
     }
     catch (error) { response.status(400).json({ error: error.message, invoiceId: id }); }
     finally { invoiceChecking.delete(id); }

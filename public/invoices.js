@@ -6,6 +6,7 @@ const workDate = (value = Date.now()) => new Date(new Date(value).getTime() + 9 
 let current = null, runs = [], busy = false, checkingRegistration = false;
 let dayBatches = [], previewOrders = [], previewReady = false, selectedSourceDate = workDate();
 let showRecentHistory = false;
+let dateCheckAvailable = false;
 const selectedBatches = new Map();
 const itemChanges = new Map(), issueChanges = new Map();
 const registrationLabels = { unchecked: '등록 미조회', pending: '등록 미확인', complete: '등록 확인 완료', conflict: '송장 불일치' };
@@ -24,11 +25,13 @@ function message(text, error = false) {
 function isDirty() { return itemChanges.size > 0 || issueChanges.size > 0; }
 function draftItem(item) { return { ...item, ...itemChanges.get(String(item.id)) }; }
 function draftIssue(issue) { return { ...issue, ...issueChanges.get(issue.key) }; }
+function readOnlyOrder(order) { return Boolean(order.latestStatus?.readonly || ['canceled', 'returned'].includes(order.state)); }
 function scopeUnavailable() { return current && (current.scopeRequired || !Array.isArray(current.orders)); }
 function downloadItems() { return (current?.items || []).filter(item => item.decision === 'include' && item.registrationState !== 'complete' && !item.sourceRegistered); }
 function storedDownloadMode() { return current?.run.savedFileAvailable ? 'saved' : 'rebuild'; }
 function primaryDownloadMode() {
   if (current?.run.generatedAt && current.items.some(item => item.trackingSelection)) return 'rebuild';
+  if (current?.run.generatedAt && current.currentOrders?.some(readOnlyOrder)) return storedDownloadMode();
   return current?.run.generatedAt && !downloadItems().length ? storedDownloadMode() : 'export';
 }
 function blockingKeys(item) { return item.blockingIssueKeys || (item.issues || []).filter(key => current.issues.some(issue => issue.key === key && issue.blocking)); }
@@ -48,6 +51,9 @@ function refreshControls() {
   $('redownload-button').textContent = storedDownloadMode() === 'saved' ? '생성한 엑셀 다시 받기' : '현재 매칭 엑셀 받기';
   $('check-button').disabled = busy || !current || dirty || (!current.items.length && !current.outsideOrders?.length) || scopeUnavailable() || current.rematchRequired;
   $('check-button').textContent = checkingRegistration ? '조회 중…' : '등록 상태 확인';
+  $('date-check-button').hidden = Boolean(current);
+  $('date-check-button').disabled = busy || dirty || !dateCheckAvailable;
+  $('date-check-button').textContent = checkingRegistration ? '조회 중…' : '등록 상태 확인';
   $('refresh-run').disabled = busy || !current;
   $('dirty-note').textContent = dirty ? '검토 내용이 변경되었습니다. 저장해 주세요.' : '';
   if (current) {
@@ -103,7 +109,7 @@ function groupHeading(group, columns) {
   const otherDate = date && date !== selectedSourceDate;
   row.classList.toggle('other-date', Boolean(otherDate));
   const files = [...new Set(group.orders.map(order => order.source?.sourceFile).filter(Boolean))];
-  heading.append(element('strong', group.sourceType === 'naver_only' ? '① 네이버에만 있는 주문 · ② 확인한 주문 자료 없음' : `작업 ${formatTime(sourceTime)}`));
+  heading.append(element('strong', group.sourceType === 'naver_only' ? '① 네이버 주문파일' : `작업 ${formatTime(sourceTime)}`));
   if (date) heading.append(element('span', otherDate ? date < selectedSourceDate ? '이전 날짜 주문' : '다른 날짜 주문' : '선택한 날짜', 'order-date-badge'));
   heading.append(element('span', `파일: ${files.join(' · ') || batch?.name || '원본 정보 없음'}`), element('small', `${count(group.orders.length)}행`));
   cell.append(heading); row.append(cell); return row;
@@ -121,9 +127,10 @@ function renderPreview() {
     for (const number of order.trackingNumbers || []) state.append(element('small', number));
     if (order.state !== 'not_matched' && order.reason && order.reason !== matchLabel(order.state) && order.state !== 'pending') state.append(element('small', order.reason, 'match-reason'));
     if (order.checkedAt) state.append(element('small', `조회 ${formatTime(order.checkedAt)}`));
-    if (order.latestRunId && (order.itemIds?.length || order.evidence)) {
-      const link = element('button', `${order.processingDate || ''} 처리 내역`, 'text-button'); link.type = 'button';
-      link.addEventListener('click', () => { if (!busy && allowDiscard()) loadRun(order.latestRunId); }); state.append(link);
+    const latestRunId = order.latestStatus?.runId || order.latestRunId, processingDate = order.latestStatus?.processingDate || order.processingDate;
+    if (latestRunId && (order.itemIds?.length || order.evidence || order.latestStatus)) {
+      const link = element('button', `${processingDate || ''} 처리 내역`, 'text-button'); link.type = 'button';
+      link.addEventListener('click', () => { if (!busy && allowDiscard()) loadRun(latestRunId); }); state.append(link);
     }
     row.append(recipient, product, location, state); fragment.append(row);
     }
@@ -131,14 +138,15 @@ function renderPreview() {
   $('preview-rows').replaceChildren(fragment); $('preview-count').textContent = `${count(previewOrders.length)}행`;
 }
 async function loadPreview() {
-  previewReady = false;
+  previewReady = false; dateCheckAvailable = false;
   if (!selectedBatches.size) { previewOrders = []; previewReady = true; renderPreview(); $('preview-message').textContent = '이 날짜에 등록한 주문이 없어도 파일을 올리면 다른 날짜의 주문을 찾아 매칭합니다.'; return; }
   $('preview-message').textContent = '해당 날짜의 확인한 주문 전체를 불러오고 있습니다.';
   try {
     const query = new URLSearchParams({ batchIds: JSON.stringify([...selectedBatches.keys()]) });
     const data = await api(`/api/invoices/orders?${query}`);
     if (!Array.isArray(data.orders)) throw new Error('현재 실행 중인 서버가 이전 버전입니다. system0 서버를 재시작해 주세요.');
-    previewOrders = data.orders; previewReady = true; renderPreview(); $('preview-message').textContent = '선택한 날짜의 원본 주문과 최근 연결 결과입니다. 파일 매칭은 날짜와 관계없이 ① 네이버 주문에 해당하는 자료를 찾습니다.';
+    previewOrders = data.currentOrders || data.orders; dateCheckAvailable = data.checkAvailable ?? Boolean(dayBatches.length);
+    previewReady = true; renderPreview(); $('preview-message').textContent = '선택한 날짜의 원본 주문과 최근 연결 결과입니다. 파일 매칭은 날짜와 관계없이 ① 네이버 주문에 해당하는 자료를 찾습니다.';
   } catch (error) { previewOrders = []; renderPreview(); $('preview-message').textContent = error.message; }
 }
 async function resumeSavedMatch() {
@@ -269,7 +277,7 @@ function warningsForCourier(courier) {
       && (!issue.source.fileHash || issue.source.fileHash === source.fileHash)));
 }
 function renderIssues() {
-  const assigned = new Set(displayedOrders().flatMap(order => warningsForOrder(order).map(issue => issue.key)));
+  const assigned = new Set((current.orders || []).flatMap(order => order.issues || []));
   for (const courier of current.unmatchedCouriers || []) for (const issue of warningsForCourier(courier)) assigned.add(issue.key);
   const issues = scopeUnavailable() ? [] : (current.issues || []).filter(issue => issue.reviewRequired !== false && !assigned.has(issue.key));
   const fragment = document.createDocumentFragment();
@@ -357,7 +365,7 @@ function trackingChoices(order, linked) {
   return group;
 }
 function displayedOrders() {
-  const orders = scopeUnavailable() ? previewOrders : current?.orders || previewOrders;
+  const orders = scopeUnavailable() ? previewOrders : current?.currentOrders || current?.orders || previewOrders;
   return [...orders.filter(order => order.sourceType === 'naver_only'), ...orders.filter(order => order.sourceType !== 'naver_only')];
 }
 function renderItems() {
@@ -365,15 +373,17 @@ function renderItems() {
   const allOrders = displayedOrders();
   const orders = allOrders.filter(order => {
     const linked = current.items.filter(item => order.itemIds.includes(item.id)).map(draftItem);
-    const matches = filter === 'all' || (filter === 'attention' ? Boolean(matchClass(order.state)) || linked.some(item => item.decision === 'hold')
-      : filter === 'registered' ? order.state === 'complete' : filter === 'include' ? order.trackingNumbers.length > 0 : linked.some(item => item.decision === filter));
+    const readonly = readOnlyOrder(order);
+    const matches = filter === 'all' || (filter === 'attention' ? Boolean(matchClass(order.state)) || (!readonly && linked.some(item => item.decision === 'hold'))
+      : filter === 'registered' ? ['complete', 'external_registered'].includes(order.state) : filter === 'include' ? order.trackingNumbers.length > 0
+      : readonly ? order.state === ({hold:'hold',exclude:'excluded'}[filter] || filter) : linked.some(item => item.decision === filter));
     return matches && (!query || [order.recipient, order.phone, order.cleanedName, order.originalName, order.optionName, order.orderId, order.internalId, ...order.trackingNumbers, ...linked.map(item => item.productOrderId)].join(' ').toLocaleLowerCase().includes(query));
   });
   const fragment = document.createDocumentFragment();
   for (const group of orderGroups(orders)) {
     fragment.append(groupHeading(group, 5));
     for (const order of group.orders) {
-    const linked = current.items.filter(item => order.itemIds.includes(item.id)), row = element('tr', undefined, matchClass(order.state));
+    const linked = current.items.filter(item => order.itemIds.includes(item.id)), readonly = readOnlyOrder(order), row = element('tr', undefined, matchClass(order.state));
     row.classList.toggle('is-excluded', order.state === 'excluded');
     row.classList.toggle('combined-order', linked.length > 1);
     const recipient = element('td'); recipient.append(element('strong', order.recipient || '수취인 정보 없음')); if (order.phone) recipient.append(element('small', order.phone));
@@ -383,8 +393,15 @@ function renderItems() {
     if (order.sourceType === 'naver_only' && order.optionName) product.append(element('small', `선택 옵션: ${order.optionName}`));
     product.append(element('small', `${order.sourceType === 'naver_only' ? '① ' : '② '}${location}`, 'source-location'));
     const details = element('details'); details.append(element('summary', '주문 연결 근거'), element('p', [...new Set(linked.map(sourceDescription))].filter(Boolean).join('\n') || (order.internalId ? `내부 출고번호: ${order.internalId}` : order.reason || '연결된 자료가 없습니다.'))); product.append(details);
+    if (readonly && order.originalOrder) {
+      const original = order.originalOrder, history = element('details'); history.append(element('summary', '당시 매칭 이력'));
+      const warnings = current.issues.filter(issue => (original.issues || []).includes(issue.key));
+      history.append(element('p', [matchLabel(original.state), original.reason, ...(original.trackingNumbers || []), ...warnings.map(issue => issue.message)].filter(Boolean).join('\n')));
+      product.append(history);
+    }
     const tracking = element('td');
-    tracking.append(trackingChoices(order, linked));
+    if (readonly) for (const number of order.trackingNumbers) tracking.append(element('strong', number));
+    else tracking.append(trackingChoices(order, linked));
     if (!order.trackingNumbers.length) tracking.append(element('span', order.state === 'not_matched' ? '송장 매칭 전' : '대응 송장 없음'));
     if (order.courierRows?.length) {
       const sources = element('details'); sources.append(element('summary', '③ 송장 원본 위치'));
@@ -393,6 +410,14 @@ function renderItems() {
     }
     const history = shipmentHistory(linked); if (history) tracking.append(history);
     const review = element('td');
+    if (readonly) {
+      const latest = order.latestStatus || {};
+      if (latest.runId) {
+        const link = element('button', `${latest.processingDate || ''} 처리 내역`, 'text-button'); link.type = 'button';
+        link.addEventListener('click', () => { if (!busy && allowDiscard()) loadRun(latest.runId); }); review.append(link);
+      }
+      if (order.reason && !['ready', 'complete', 'external_registered'].includes(order.state)) review.append(element('small', order.reason, 'match-reason'));
+    } else {
     if (!['ready', 'complete'].includes(order.state)) review.append(element('span', matchLabel(order.state), `match-state ${matchClass(order.state)}`));
     const warnings = warningsForOrder(order);
     if (order.reason && !warnings.length && !['ready', 'complete'].includes(order.state)) review.append(element('small', order.reason, 'match-reason'));
@@ -402,7 +427,14 @@ function renderItems() {
     }
     appendWarnings(review, warnings);
     if (!linked.length && order.state === 'not_matched') review.append(element('small', '아직 이 주문에 송장을 매칭하지 않았습니다.'));
+    }
     const registration = element('td');
+    if (readonly) {
+      const state = order.latestStatus?.registrationState || 'unchecked', complete = ['complete','external_registered'].includes(order.state);
+      const label = ['canceled','returned'].includes(order.state) ? matchLabel(order.state) : complete ? '등록 확인 완료' : registrationLabels[state] || matchLabel(order.state);
+      registration.append(element('span', label, `registration-badge ${complete ? 'registered' : state}`));
+      if (order.latestStatus?.checkedAt) registration.append(element('small', `조회 ${formatTime(order.latestStatus.checkedAt)}`));
+    } else {
     for (const item of linked) {
       const state = item.registrationState || 'unchecked';
       if (linked.length > 1) registration.append(element('small', item.productOrderId));
@@ -411,6 +443,7 @@ function renderItems() {
       if (item.sourceRegistered && state !== 'complete') registration.append(element('small', '원본에 동일 송장 있음 · 중복 다운로드 제외'));
     }
     if (!linked.length) registration.append(element('small', order.state === 'not_matched' ? '매칭 전' : '등록 대상 미연결'));
+    }
     row.append(recipient, product, tracking, review, registration); fragment.append(row);
     }
   }
@@ -421,7 +454,7 @@ function renderItems() {
 }
 function renderOutsideTarget() {
   const relatedRows = new Set((current.orders || []).map(order => order.rowId));
-  const orders = [...(current.outsideOrders || [])], represented = new Set([...relatedRows, ...orders.map(order => order.rowId)]);
+  const orders = [...(current.currentOutsideOrders || current.outsideOrders || [])], represented = new Set([...relatedRows, ...orders.map(order => order.rowId)]);
   for (const order of previewOrders) if (!represented.has(order.rowId)) orders.push(order);
   const fragment = document.createDocumentFragment(), states = {};
   for (const order of orders) states[order.state] = (states[order.state] || 0) + 1;
@@ -484,16 +517,18 @@ function showRun(data) {
   $('run-title').textContent = '송장 매칭 결과';
   const fileSummary = (data.files || []).map(file => `${file.kind === 'naver' ? '①' : '③'} ${file.name}`).join(' · ');
   $('run-description').textContent = `${formatTime(data.run.createdAt)} · 네이버 스마트스토어 · ${data.run.carrierName || ''}\n${fileSummary || '선택한 확인한 주문 작업 기준으로 연결한 결과입니다.'}${data.run.generatedAt ? `\n파일 생성: ${formatTime(data.run.generatedAt)} · 네이버 등록 상태는 별도로 확인합니다.` : '\n작성 내용은 보관되며, 파일을 생성하기 전에는 왼쪽 생성 내역에 표시하지 않습니다.'}`;
-  $('total-count').textContent = count(data.items.length); $('ready-count').textContent = count(data.summary.connected ?? data.items.filter(item => item.sourceRows?.length).length);
+  const currentSummary = data.currentSummary || data.summary;
+  $('total-count').textContent = count(data.items.length); $('ready-count').textContent = count(currentSummary.connected ?? data.items.filter(item => item.sourceRows?.length).length);
   const sameDate = data.summary.selectedDate ?? data.items.filter(item => item.sourceDate === selectedSourceDate).length;
   const otherDate = data.summary.otherDate ?? data.items.filter(item => item.sourceDate && item.sourceDate !== selectedSourceDate).length;
   const unknownDate = data.summary.unknownDate ?? data.items.filter(item => !item.sourceDate).length;
   $('match-date-summary').textContent = `선택한 날짜 ${count(sameDate)}건 + 다른 날짜 ${count(otherDate)}건${unknownDate ? ` + 원본 날짜 확인 필요 ${count(unknownDate)}건` : ''} = 이번 처리 대상 ${count(data.items.length)}건`;
-  const missing = data.summary.missingSaved ?? data.items.filter(item => !item.sourceRows?.length).length;
-  $('attention-count').textContent = count(missing); $('registered-count').textContent = count(data.items.filter(item => item.registrationState === 'complete' && item.statusFresh).length);
+  const missing = currentSummary.missingSaved ?? data.items.filter(item => !item.sourceRows?.length).length;
+  $('attention-count').textContent = count(missing); $('registered-count').textContent = count(data.currentSummary?.complete ?? data.items.filter(item => item.registrationState === 'complete' && item.statusFresh).length);
   $('naver-missing-note').hidden = !missing;
   $('naver-missing-note').textContent = `① 최종 네이버 주문 중 ${count(missing)}건에 대응하는 ② 확인한 주문 자료가 없습니다. 아래 첫 그룹에서 송장 누락 여부를 확인하세요. 보류·제외된 상품주문은 엑셀에 포함하지 않습니다.`;
-  $('last-check').textContent = data.run.statusCheckedAt ? `마지막 등록 조회: ${formatTime(data.run.statusCheckedAt)}` : '아직 네이버 등록 상태를 조회하지 않았습니다.';
+  const checkedAt = (data.currentOrders || []).map(order => order.latestStatus?.checkedAt).filter(Boolean).sort().at(-1) || data.run.statusCheckedAt;
+  $('last-check').textContent = checkedAt ? `마지막 등록 조회: ${formatTime(checkedAt)}` : '아직 네이버 등록 상태를 조회하지 않았습니다.';
   renderRegistrationResult();
   renderIssues(); if (unavailable) $('issues-section').hidden = true; renderItems(); renderHistory(); refreshControls();
 }
@@ -546,28 +581,38 @@ async function downloadExcel(mode = primaryDownloadMode()) {
 }
 function renderRegistrationResult() {
   const result = $('registration-result'); result.classList.remove('is-error');
+  if (current?.currentSummary) {
+    const summary = current.currentSummary;
+    result.textContent = `등록 확인 ${count(summary.complete)} · 송장 찾음 ${count(summary.ready)} · 취소 ${count(summary.canceled)} · 반품 ${count(summary.returned)} · 확인 필요 ${count((summary.unknown || 0) + (summary.attention || 0) + (summary.hold || 0))}`;
+    return;
+  }
   if (!current?.run.statusCheckedAt) { result.textContent = '이번 처리 대상은 아직 등록 상태를 조회하지 않았습니다.'; return; }
   const items = current.items || [], counts = { complete: 0, pending: 0, conflict: 0, unchecked: 0 };
   for (const item of items) counts[item.statusFresh ? item.registrationState : 'unchecked']++;
   result.textContent = `${formatTime(current.run.statusCheckedAt)} 조회 · 상품주문 ${count(items.length)}건\n등록 완료 ${count(counts.complete)} · 미등록 ${count(counts.pending)} · 충돌 ${count(counts.conflict)}${counts.unchecked ? ` · 재조회 필요 ${count(counts.unchecked)}` : ''}`;
 }
 async function checkRegistration() {
-  if (busy || !current || isDirty()) return;
+  if (busy || isDirty() || (!current && !dateCheckAvailable)) return;
+  const runId = current?.run.id;
   checkingRegistration = true;
   $('registration-result').classList.remove('is-error'); $('registration-result').textContent = '네이버 등록 상태를 조회하고 있습니다…';
-  setBusy(true); message('네이버에 등록된 현재 송장을 조회하고 있습니다. 주문 상태는 변경하지 않습니다.');
+  setBusy(true); message('관련 처리 내역의 등록 상태를 조회하고 있습니다.');
   try {
-    showRun(await api(`/api/invoices/${current.run.id}/check`, { method: 'POST' }));
-    message('등록 상태를 조회했습니다. 미확인·불일치 항목을 확인해 주세요.');
-    try { await loadHistory(); } catch { message('등록 상태 조회는 완료했지만 왼쪽 생성 내역을 갱신하지 못했습니다. 새로고침으로 확인해 주세요.', true); }
+    const result = await api('/api/invoices/check-date', { method: 'POST', headers: {'Content-Type':'application/json'}, body: JSON.stringify({date:selectedSourceDate}) });
+    await loadPreview();
+    if (runId) showRun(await api(`/api/invoices/${runId}`));
+    await loadHistory();
+    const failed = result.errors?.length || 0;
+    message(failed ? `일부 등록 상태를 확인하지 못했습니다.\n${[...new Set(result.errors.map(value => value.error))].join('\n')}`
+      : `관련 처리 내역 ${count(result.runIds?.length)}개의 등록 상태를 확인했습니다.`, Boolean(failed));
   }
   catch (error) {
-    try { showRun(await api(`/api/invoices/${current.run.id}`)); } catch { /* 기존 결과를 보존하고 조회 실패를 안내합니다. */ }
-    message(`${error.message}\n이번 처리 대상의 조회를 완료하지 못했습니다. 파일 밖 주문의 조회 결과는 아래 별도 목록에서 확인하세요.`, true);
+    try { await loadPreview(); if (runId) showRun(await api(`/api/invoices/${runId}`)); } catch { /* 기존 표시를 보존합니다. */ }
+    message(error.message, true);
     $('registration-result').textContent = `조회 실패: ${error.message}\n등록 상태를 확인하지 못했습니다. 다시 조회해 주세요.`;
     $('registration-result').classList.add('is-error');
   }
-  finally { checkingRegistration = false; setBusy(false); $('registration-result').scrollIntoView({ block: 'nearest' }); }
+  finally { checkingRegistration = false; setBusy(false); if (current) $('registration-result').scrollIntoView({ block: 'nearest' }); }
 }
 function newRun() {
   if (busy || !allowDiscard()) return;
@@ -607,6 +652,7 @@ $('save-button').addEventListener('click', saveReview);
 $('export-button').addEventListener('click', () => downloadExcel());
 $('redownload-button').addEventListener('click', () => downloadExcel(storedDownloadMode()));
 $('check-button').addEventListener('click', checkRegistration);
+$('date-check-button').addEventListener('click', checkRegistration);
 $('refresh-run').addEventListener('click', () => { if (!busy && current && allowDiscard()) loadRun(current.run.id); });
 $('search').addEventListener('input', () => { if (current) renderItems(); });
 $('item-filter').addEventListener('change', () => { if (current) renderItems(); });
