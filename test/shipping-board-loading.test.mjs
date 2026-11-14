@@ -27,6 +27,23 @@ function harness(apiStub) {
 const boardFor = route => { const query = new URL(route, 'http://test').searchParams;
   return { date: query.get('date'), selectedBatchId: query.has('batchId') ? Number(query.get('batchId')) : null }; };
 
+test('목록 응답을 표시하기 전에는 달력 API를 시작하지 않는다', async () => {
+  const board = deferred(), calendar = deferred(), requests = [];
+  const h = harness(route => { requests.push(route); return route.includes('/dates?') ? calendar.promise : board.promise; });
+  const loading = h.run('loadBoard({ reloadCalendar: true })');
+  try {
+    await settle();
+    assert.equal(requests.filter(route => route.includes('/dates?')).length, 0, '목록 처리 중에 달력 계산을 시작하면 안 된다.');
+    board.resolve({ date: '2026-11-14', selectedBatchId: null }); await loading;
+    assert.equal(h.rendered.length, 1);
+    assert.equal(h.state().busy, false);
+    assert.equal(requests.filter(route => route.includes('/dates?')).length, 1);
+  } finally {
+    board.resolve({ date: '2026-11-14', selectedBatchId: null }); calendar.resolve({ days: [] });
+    await loading; await settle();
+  }
+});
+
 test('달력 응답을 기다리지 않고 목록을 표시하며 작업 선택과 같은 월 요청 공유가 가능하다', async () => {
   const calendar = deferred(), requests = [];
   const h = harness(route => { requests.push(route); return route.includes('/dates?') ? calendar.promise : Promise.resolve(boardFor(route)); });

@@ -201,9 +201,9 @@ async function loadBoard({ reloadCalendar = false } = {}) {
     const query = new URLSearchParams({ date: selectedDate });
     if (selectedBatchId !== null) query.set('batchId', selectedBatchId);
     const request = api(`/api/shipping/board?${query}`);
-    if (reloadCalendar) void loadCalendar(calendarMonth);
     const data = await request;
     renderBoard(data); renderCalendar();
+    if (reloadCalendar) void loadCalendar(calendarMonth);
   } catch (error) {
     if (boardData) {
       selectedDate = boardData.date; selectedBatchId = boardData.selectedBatchId; renderCalendar();
