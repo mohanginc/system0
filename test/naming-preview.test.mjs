@@ -97,7 +97,7 @@ test('현 지침의 직원 완료명 우선과 확인 필요 메모를 키 없�
   const before = snapshot(db), priorCalls = calls(db).length;
   const result = await normalizePreviewNames(db, [input(1, '원본 A', '옵션 A'), input(2, '원본 B', '옵션 B')], null, 'mock');
   assert.deepEqual(result[0], { id: 1, cleanedName: '직원이 확정한 명칭', needsAttention: false,
-    note: '직원 검수 메모', source: 'reused' });
+    note: '직원 검수 메모', source: 'reused', skuBarcode: null });
   assert.equal(result[1].needsAttention, true);
   assert.equal(result[1].note, '원본 옵션 재확인');
   assert.equal(result[1].source, 'reused');

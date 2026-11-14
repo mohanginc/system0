@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>상품·바코드 · system0</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/brand-star.svg">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/products.css">
+  <script src="/navigation.js" defer></script>
+  <script src="/products.js" defer></script>
+</head>
+<body class="products-page">
+  <header class="header">
+    <a class="brand" href="/" aria-label="system0 홈"><img class="brand-mark" src="/assets/brand-star.svg" alt="베이비스텔라 별 로고" width="34" height="56"> system0</a>
+    <nav class="app-nav" aria-label="업무 메뉴"></nav>
+  </header>
+  <main>
+    <div id="message" class="message" role="status" aria-live="polite" hidden></div>
+    <section class="review-card" aria-labelledby="register-title">
+      <div class="review-heading"><h2 id="register-title">상품 등록</h2></div>
+      <form id="product-form" class="product-form">
+        <label class="product-name-field" for="product-name">제품명<input id="product-name" name="name" type="text" required autocomplete="off"></label>
+        <label for="product-barcode">바코드<input id="product-barcode" name="barcode" type="text" inputmode="numeric" pattern="[0-9]{13}" minlength="13" maxlength="13" title="13자리 숫자" placeholder="13자리 숫자" required autocomplete="off"></label>
+        <button id="register-button" type="submit" class="primary">상품 등록</button>
+      </form>
+    </section>
+    <section class="review-card product-section" aria-labelledby="products-title">
+      <div class="review-heading"><h2 id="products-title">등록 상품 <span id="product-count" class="product-count">—</span></h2></div>
+      <div class="table-wrap catalog-wrap"><table class="product-table catalog-table"><thead><tr><th scope="col">바코드</th><th scope="col">제품명</th><th scope="col">연결명 수</th></tr></thead><tbody id="product-rows"></tbody></table><p id="products-empty" class="product-empty" hidden>등록한 상품이 없습니다.</p></div>
+    </section>
+    <section class="review-card product-section" aria-labelledby="unmatched-title">
+      <div class="review-heading"><h2 id="unmatched-title">바코드 없는 제품명 <span id="unmatched-count" class="product-count">—</span></h2><button id="refresh-button" type="button">새로고침</button></div>
+      <div class="toolbar"><input id="unmatched-search" type="search" placeholder="정리된 제품명 검색" aria-label="바코드 없는 제품명 검색"></div>
+      <div class="table-wrap">
+        <table class="product-table unmatched-table"><thead><tr><th scope="col">정리된 제품명</th><th scope="col">주문 행수</th><th scope="col">연결할 상품</th><th scope="col">연결</th></tr></thead><tbody id="unmatched-rows"></tbody></table>
+        <p id="unmatched-empty" class="product-empty" hidden>바코드 없는 제품명이 없습니다.</p>
+      </div>
+      <div class="table-footer"><span id="visible-count"></span><button id="show-more" type="button" hidden>50개 더 보기</button></div>
+    </section>
+  </main>
+  <footer><span>system0 · 상품·바코드</span></footer>
+</body>
+</html>

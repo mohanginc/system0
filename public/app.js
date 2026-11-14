@@ -23,7 +23,7 @@ function json(method, body) { return { method, headers: { 'Content-Type': 'appli
 function groupRows(rows) {
   const result = new Map();
   for (const row of rows) {
-    const key = JSON.stringify([row.originalName, row.optionName, row.cleanedName, row.status, row.reviewNote]);
+    const key = JSON.stringify([row.originalName, row.optionName, row.cleanedName, row.skuBarcode || null, row.status, row.reviewNote]);
     if (!result.has(key)) result.set(key, { ...row, ids: [], sources: new Set(), nameSources: new Set() });
     const group = result.get(key);
     group.ids.push(row.id); group.sources.add(row.sourceFile);
@@ -38,7 +38,7 @@ function filteredGroups() {
   const search = $('search').value.trim().toLocaleLowerCase(), status = $('status-filter').value;
   return remainingGroups().filter((group) => {
     const row = values(group);
-    return (status === 'all' || row.status === status) && `${row.originalName} ${row.optionName} ${row.cleanedName} ${row.reviewNote}`.toLocaleLowerCase().includes(search);
+    return (status === 'all' || row.status === status) && `${row.originalName} ${row.optionName} ${row.cleanedName} ${row.skuBarcode || ''} ${row.reviewNote}`.toLocaleLowerCase().includes(search);
   });
 }
 function updateMetrics(detail = current) {
@@ -127,6 +127,10 @@ function nameOrigin(group) {
   }
   element.hidden = !element.childElementCount; return element;
 }
+function barcodeText(group, row = group) {
+  if ((row.cleanedName || '') !== (group.cleanedName || '')) return '바코드 · 저장 전';
+  return row.skuBarcode ? `바코드 ${row.skuBarcode}` : '바코드 없음';
+}
 function renderRows() {
   const filtered = filteredGroups(), visible = filtered.slice(0, visibleLimit), body = $('rows');
   body.replaceChildren();
@@ -140,13 +144,15 @@ function renderRows() {
     if (row.optionName) originalCell.append(cell(`옵션 · ${row.optionName}`, 'option-name'));
     originalCell.append(cell(`주문 ${group.ids.length}행 · ${[...group.sources].slice(0, 2).join(', ')}${group.sources.size > 2 ? ` 외 ${group.sources.size - 2}개 파일` : ''}`, 'source-info'));
     const nameCell = tr.insertCell(), nameInput = document.createElement('textarea');
+    const barcode = cell(barcodeText(group, row), 'sku-barcode');
     nameInput.value = row.cleanedName || ''; nameInput.className = 'name-input'; nameInput.placeholder = '상품명 정리 후 표시됩니다';
     nameInput.setAttribute('aria-label', `${row.originalName}의 정리된 제품명`);
     nameInput.addEventListener('input', () => {
       const status = values(group).status === 'pending' && nameInput.value.trim() ? 'review' : values(group).status;
       draft(group, { cleanedName: nameInput.value, status }); statusBadge.textContent = labels[status]; statusBadge.className = `status ${status}`;
+      barcode.textContent = barcodeText(group, values(group));
     });
-    nameCell.append(nameInput, nameOrigin(group));
+    nameCell.append(nameInput, barcode, nameOrigin(group));
     const noteCell = tr.insertCell(), noteInput = document.createElement('textarea');
     noteInput.value = row.reviewNote || ''; noteInput.className = 'note-input'; noteInput.placeholder = '필요한 검수 메모';
     noteInput.setAttribute('aria-label', `${row.originalName}의 검수 메모`);
@@ -216,7 +222,7 @@ async function showDayOverview() {
       original.append(cell(group.originalName, 'original-name'));
       if (group.optionName) original.append(cell(`옵션 · ${group.optionName}`, 'option-name'));
       original.append(cell(`주문 ${group.ids.length}행`, 'source-info'));
-      row.insertCell().append(document.createTextNode(group.cleanedName || '미정리'), nameOrigin(group));
+      row.insertCell().append(document.createTextNode(group.cleanedName || '미정리'), cell(barcodeText(group), 'sku-barcode'), nameOrigin(group));
       row.insertCell().textContent = group.reviewNote;
       row.insertCell().append(cell(labels[group.status], `status ${group.status}`));
     }

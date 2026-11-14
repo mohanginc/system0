@@ -2,18 +2,48 @@
 .usage-filters label { display: flex; flex-direction: column; gap: 6px; font-size: 11px; }
 .usage-filters select { min-width: 180px; }
 .usage-metrics { margin: 20px 25px; }
-.usage-table { min-width: 650px; }
+.usage-table { min-width: 950px; }
 .usage-table th:nth-child(n) { width: auto; }
-.usage-table th:first-child { width: 20%; }
-.usage-table th:nth-child(2) { width: 30%; }
+.usage-table th:first-child { width: 120px; }
+.usage-table th:nth-child(2) { width: 190px; }
+.usage-table th:nth-last-child(-n+2) { width: 145px; }
 .usage-table th:nth-child(n+3), .usage-table td:nth-child(n+3) { text-align: right; }
 .usage-table td:first-child { text-align: left; padding: 17px 16px; }
 .usage-table .before-tracking { color: #777; }
 .usage-note { margin: 16px 25px; font-size: 11px; line-height: 1.7; }
+.usage-costs { display: flex; flex-wrap: wrap; gap: 18px 36px; padding: 0 25px 12px; }
+.usage-costs > div { min-width: 130px; }
+.usage-costs span, .usage-costs strong, .usage-costs small { display: block; }
+.usage-costs span { font-size: 11px; color: #555; }
+.usage-costs strong { margin-top: 5px; font-size: 21px; font-weight: 540; font-variant-numeric: tabular-nums; }
+.usage-costs small { margin-top: 4px; font-size: 10px; line-height: 1.5; color: #666; }
+.pricing-note { margin-top: 0; }
+.cost-value { font-variant-numeric: tabular-nums; white-space: nowrap; }
+.cost-reason { display: block; margin-top: 3px; font-size: 10px; line-height: 1.5; color: #666; white-space: normal; }
+.usage-records-heading { margin: 24px 25px 10px; display: flex; align-items: baseline; gap: 12px; }
+.usage-records-heading h3 { margin: 0; font-size: 14px; }
+.usage-records-heading span { font-size: 11px; color: #666; }
+.records-table { min-width: 1130px; }
+.records-table th:nth-child(n) { width: 95px; }
+.records-table th:first-child { width: 155px; }
+.records-table th:nth-child(2) { width: 175px; }
+.records-table th:nth-child(3) { width: 180px; }
+.records-table th:nth-child(4) { width: 80px; }
+.records-table th:last-child { width: 150px; }
+.records-table th, .records-table td { padding: 10px 12px; }
+.records-table td:first-child { padding: 10px 12px; text-align: left; white-space: nowrap; }
+.records-table td:nth-child(2), .records-table td:nth-child(3) { overflow-wrap: anywhere; }
+.records-table th:nth-child(n+5), .records-table td:nth-child(n+5) { text-align: right; font-variant-numeric: tabular-nums; }
+.records-table th:nth-child(4), .records-table td:nth-child(4) { text-align: center; }
+.usage-records-footer { padding: 12px 25px; }
 @media (max-width: 700px) {
   .usage-filters { padding: 16px 20px; }
   .usage-filters label { flex: 1; min-width: 130px; }
   .usage-filters input, .usage-filters select { width: 100%; min-width: 0; }
   .usage-metrics { margin: 16px 20px; }
   .usage-note { margin-inline: 20px; }
+  .usage-costs { padding-inline: 20px; gap: 12px 24px; }
+  .usage-costs strong { font-size: 19px; }
+  .usage-records-heading { margin-inline: 20px; }
+  .usage-records-footer { padding-inline: 20px; }
 }

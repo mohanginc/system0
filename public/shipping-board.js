@@ -83,6 +83,8 @@ function renderGroup(group, open, preview = false) {
   details.classList.toggle('is-attention', Boolean(group.needsAttention));
   const summary = element('summary'), name = element('div', undefined, 'shipment-name');
   name.append(element('h2', group.name || '상품명 미정리'));
+  const barcode = group.skuBarcode ? `바코드 ${group.skuBarcode}` : '바코드 없음';
+  name.append(element('small', barcode + (group.shipmentType === 'exchange' ? ' · 맞교환' : ''), 'sku-barcode'));
   const status = group.needsAttention ? (preview ? '상품명 확인이 필요합니다. 상세 목록의 사유를 확인하세요.' : '출고 정보 확인이 필요합니다.') : group.unprepared ? '상품명 정리가 필요합니다.'
     : complete ? '몰 송장 등록 확인 완료' : invoiceState(group.invoiceState) === 'pending' ? '송장 등록 확인 필요' : '';
   if (status) name.append(element('span', status, 'item-status'));

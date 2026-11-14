@@ -14,6 +14,7 @@ import { listLlmPurposes, llmUsage } from './lib/llm.mjs';
 import { shippingBoard, shippingDates } from './lib/shipping.mjs';
 import { createNaverClient } from './lib/naver.mjs';
 import { previewShippingBoard } from './lib/shipping-preview.mjs';
+import { productCatalog, addProduct, linkProductName } from './lib/products.mjs';
 import { CARRIERS, unlockNaverFiles, classifyInvoiceFiles, prepareInvoiceFile, importInvoiceFiles, listInvoiceRuns, listInvoiceDrafts, reviseInvoiceItems,
   exportInvoices, downloadInvoices, latestInvoice, refreshInvoiceStatus, refreshOutsideInvoiceStatus,
   invoiceView, invoiceSourceView, invoiceDateRunIds, checkInvoiceDate, applyInvoiceTrackingReview } from './lib/invoices.mjs';
@@ -124,6 +125,10 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
 
   app.get('/api/status', (_request, response) => response.json({ app: 'system0',
     ...(publicOrigin ? {} : { instance: realpathSync(projectRoot) }), apiKeyConfigured: Boolean(ai), model }));
+  app.use('/api/products', (_request, response, next) => { response.set('Cache-Control', 'no-store'); next(); });
+  app.get('/api/products', (_request, response) => response.json(productCatalog(db)));
+  app.post('/api/products', (request, response) => response.status(201).json(addProduct(db, request.body || {})));
+  app.post('/api/products/aliases', (request, response) => response.json(linkProductName(db, request.body || {})));
   app.use('/api/invoices', (_request, response, next) => { response.set('Cache-Control', 'no-store'); next(); });
   app.get('/api/invoices/meta', (_request, response) => response.json({ carriers: CARRIERS }));
   app.get('/api/invoices/drafts', (request, response) => response.json({ drafts: listInvoiceDrafts(db, request.query.date) }));

@@ -109,7 +109,7 @@ API는 로컬 주소에서 호출하며, 오류는 `{ "error": "안내 문구" }
 | --- | --- |
 | `GET /api/status` | 앱·모델·API 키 설정 여부 확인 |
 | `GET /api/llm/purposes` | 목적 목록 `purposes`와 기록 시작 시점 `trackingStartedAt` |
-| `GET /api/llm/usage` | `from`·`to`·`purpose`로 조회. 일별·목적별 `days`, 합계 `totals`, `trackingStartedAt` |
+| `GET /api/llm/usage` | `from`·`to`·`purpose`로 조회. 기존 `days`·`totals`·`trackingStartedAt`와 비용 합계·평균 `costs`, 호출별 토큰·추정 비용 `records`, 공식 단가 출처·확인일 `pricing` 제공. 미산정 비용은 `null`이며 평균에서는 제외 |
 | `GET /api/shipping/dates?month=YYYY-MM` | 확인한 주문의 월간 작업 등록일 조회. 월 생략 시 한국 시간 이번 달. `{ month, days: [{ date, batchCount, invoiceState }] }` 응답 |
 | `GET /api/shipping/board?date=YYYY-MM-DD&batchId=...` | 확인한 주문 조회. 날짜 생략 시 한국 시간 오늘, `batchId` 생략 시 그날 모든 작업. `date`·`batches`·`selectedBatchId`·`groups`·`summary`·`issues`·`invoiceState` 응답. 그룹의 `needsAttention`은 중복 충돌 표시, `shipments` 상세는 `id`·`recipient`·`phone`·`neighborhood` 제공 |
 | `POST /api/shipping/preview` | 본문 없이 신규 주문 조회·상품명 정리. `mode: "new"`·`from`·`to`·`updatedAt`·`invoiceState`·`summary`·`groups` 응답. `summary.quantity`와 그룹 `count`는 잔여 수량 합, `shipments`는 상품주문별 식별자·수취인·전화·동네·수량·확인 사유 제공. 중복 실행은 `409`, 조회·정리 실패는 `400` |

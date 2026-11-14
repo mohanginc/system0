@@ -7,12 +7,13 @@
   <link rel="icon" type="image/svg+xml" href="/assets/brand-star.svg">
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/llm-usage.css">
+  <script src="/navigation.js" defer></script>
   <script src="/llm-usage.js" defer></script>
 </head>
 <body>
   <header class="header">
-    <a class="brand" href="/" aria-label="system0 홈"><img class="brand-mark" src="/assets/brand-star.svg" alt="베이비스텔라 별 로고" width="34" height="56"> system0 <span class="brand-caption">AI 호출 내역</span></a>
-    <a class="text-link" href="/">주문 업무로 돌아가기</a>
+    <a class="brand" href="/" aria-label="system0 홈"><img class="brand-mark" src="/assets/brand-star.svg" alt="베이비스텔라 별 로고" width="34" height="56"> system0</a>
+    <nav class="app-nav" aria-label="업무 메뉴"></nav>
   </header>
   <main>
     <div id="message" class="message" role="status" hidden></div>
@@ -31,8 +32,17 @@
           <div><span>실패</span><strong id="failed-count">0</strong><small>재시도는 별도 호출로 기록</small></div>
           <div><span>진행 중</span><strong id="running-count">0</strong><small>조회 시점에 처리 중인 요청</small></div>
         </div>
-        <div class="table-wrap"><table class="usage-table"><thead><tr><th>날짜</th><th>호출 목적</th><th>호출 횟수</th><th>성공</th><th>실패</th><th>진행 중</th></tr></thead><tbody id="usage-rows"></tbody></table></div>
+        <div class="usage-costs">
+          <div><span>예상 비용 USD</span><strong id="total-cost">—</strong><small id="cost-excluded"></small></div>
+          <div><span>평균 / 회 USD</span><strong id="average-cost">—</strong><small id="average-basis"></small></div>
+          <div><span>미산정 호출</span><strong id="unpriced-count">—</strong></div>
+        </div>
+        <p class="usage-note pricing-note">토큰 × 단가 예상액 · 세금·할인 제외 · 과거 기록은 Standard·기본 캐시 단가 가정 · <a id="pricing-source" class="text-link" href="https://developers.openai.com/api/docs/models/gpt-6.1-sol" target="_blank" rel="noopener">공식 단가</a> · 확인 <time id="pricing-date">—</time></p>
+        <div class="table-wrap"><table class="usage-table"><thead><tr><th scope="col">날짜</th><th scope="col">호출 목적</th><th scope="col">호출 횟수</th><th scope="col">성공</th><th scope="col">실패</th><th scope="col">진행 중</th><th scope="col">비용 USD</th><th scope="col">평균 / 회 USD</th></tr></thead><tbody id="usage-rows"></tbody></table></div>
         <p id="empty-usage" class="usage-note" hidden></p>
+        <div class="usage-records-heading"><h3>호출별 내역</h3><span id="record-count"></span></div>
+        <div class="table-wrap"><table class="records-table"><thead><tr><th scope="col">시각</th><th scope="col">목적</th><th scope="col">모델</th><th scope="col">상태</th><th scope="col">입력</th><th scope="col">캐시 읽기</th><th scope="col">캐시 쓰기</th><th scope="col">출력</th><th scope="col">예상 비용 USD</th></tr></thead><tbody id="record-rows"></tbody></table></div>
+        <div class="table-footer usage-records-footer"><span id="visible-record-count"></span><button id="show-more-records" type="button" hidden>50개 더 보기</button></div>
       </div>
       <p class="usage-note">날짜는 한국 시간을 기준으로 합니다. 상품 여러 개를 한 요청으로 묶으면 호출 1회이며, 상품 수와 호출 횟수는 다릅니다.</p>
     </section>

@@ -3,12 +3,7 @@
   --board-paper: #faf9f7; --board-muted: #646b7c;
   color: var(--navy); background: var(--board-paper);
 }
-.shipping-board .header { min-height: 78px; padding: 10px 28px; border-color: #e0e1e5; }
-.shipping-board .brand { color: var(--navy); }
-.shipping-board .brand-caption { border-color: #d9dce4; font-size: 14px; }
 .shipping-board button { color: var(--navy); font-weight: 600; }
-.back-link { font-size: 13px; color: var(--board-muted); }
-.back-link span { margin-left: 8px; color: var(--pink); }
 .board-modes { max-width: 1920px; margin: 0 auto; padding: 18px 28px 0; display: flex; gap: 8px; }
 .board-modes button { font-size: 13px; background: transparent; }
 .board-modes button[aria-pressed=true] { background: var(--navy); border-color: var(--navy); color: #fff; }
@@ -113,11 +108,6 @@ html:fullscreen .shipment-name h2 { font-size: clamp(26px, 2vw, 36px); }
 html:fullscreen .bundle-number strong { font-size: 62px; }
 @media (max-width: 760px) {
   .board-modes { padding: 16px 16px 0; }
-  .shipping-board .header { padding: 9px 16px; gap: 12px; }
-  .shipping-board .brand { font-size: 20px; gap: 8px; }
-  .shipping-board .brand-caption { margin-left: 0; padding-left: 10px; font-size: 11px; }
-  .shipping-board .brand-mark { width: 28px; height: 46px; }
-  .back-link { font-size: 10px; }
   main.board-layout { grid-template-columns: 1fr; padding: 18px 16px; gap: 20px; }
   .board-sidebar { display: grid; grid-template-columns: minmax(200px, 1fr) minmax(0, 1fr); gap: 16px; }
   .board-jobs { margin-top: 0; }
@@ -142,6 +132,5 @@ html:fullscreen .bundle-number strong { font-size: 62px; }
   .board-sidebar { grid-template-columns: 1fr; }
   .board-jobs { margin-top: 3px; }
   .job-list { max-height: 180px; }
-  .back-link span { display: none; }
   .shipment-name h2 { font-size: 20px; }
 }

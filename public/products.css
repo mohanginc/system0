@@ -1,0 +1,40 @@
+.products-page main { max-width: 1280px; padding-block: 24px; }
+.products-page h2 { margin: 0; font-size: 16px; }
+.products-page .review-heading { padding: 16px 20px 12px; }
+.product-form { display: flex; flex-wrap: wrap; align-items: end; gap: 12px; padding: 0 20px 20px; }
+.product-form label { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.product-name-field { flex: 1; min-width: 220px; }
+.product-form input { width: 100%; }
+#product-barcode { width: 200px; font-variant-numeric: tabular-nums; }
+.products-page .primary { background: var(--navy); border-color: var(--navy); }
+.products-page .primary:hover:not(:disabled) { background: #23304f; }
+.product-section { margin-top: 20px; }
+.product-count { margin-left: 8px; font-size: 12px; color: #666; font-weight: 400; }
+.products-page .toolbar { padding: 10px 20px; }
+#unmatched-search { width: min(100%, 420px); }
+.products-page .table-wrap { max-height: 560px; }
+.products-page .catalog-wrap { max-height: 320px; }
+.product-table { min-width: 760px; }
+.product-table th, .product-table td { padding: 10px 16px; }
+.product-table th:nth-child(n) { width: auto; }
+.product-table td:first-child { text-align: left; }
+.product-table td { vertical-align: middle; overflow-wrap: anywhere; }
+.unmatched-table th:first-child { width: 38%; }
+.unmatched-table th:nth-child(2) { width: 85px; text-align: right; }
+.unmatched-table td:nth-child(2) { text-align: right; font-variant-numeric: tabular-nums; }
+.unmatched-table th:last-child { width: 90px; }
+.unmatched-table select { width: 100%; min-width: 0; }
+.unmatched-table .link-button { border-color: var(--pink); }
+.catalog-table { min-width: 580px; }
+.catalog-table th:first-child { width: 190px; }
+.catalog-table th:last-child { width: 100px; }
+.catalog-table td:first-child { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+.catalog-table th:last-child, .catalog-table td:last-child { text-align: right; }
+.product-empty { margin: 20px; font-size: 13px; color: #666; }
+.products-page .table-footer { padding: 12px 20px; }
+@media (max-width: 700px) {
+  .products-page main { padding-inline: 16px; }
+  .product-form label, .product-name-field { min-width: 0; width: 100%; flex: auto; }
+  #product-barcode { width: 100%; }
+  .products-page .table-footer span { display: block; }
+}

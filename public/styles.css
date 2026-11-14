@@ -34,11 +34,15 @@ a:focus-visible { outline: 2px solid var(--navy); outline-offset: 4px; }
 [hidden] { display: none !important; }
 .header {
   min-height: 88px; padding: 12px max(24px, calc((100vw - 1280px) / 2)); border-bottom: 1px solid var(--border);
-  display: flex; align-items: center; justify-content: space-between; gap: 24px; background: #fff;
+  display: flex; align-items: center; justify-content: space-between; gap: 24px; background: #fff; color: var(--navy);
 }
-.brand { display: flex; align-items: center; gap: 12px; font-size: 24px; font-weight: 700; letter-spacing: -.8px; }
+.brand { display: flex; align-items: center; gap: 12px; font-size: 24px; font-weight: 700; letter-spacing: -.8px; white-space: nowrap; }
 .brand-mark { width: 34px; height: 56px; display: block; object-fit: contain; flex-shrink: 0; }
-.brand-caption { margin-left: 8px; padding-left: 20px; border-left: 1px solid var(--ink); font-size: 12px; font-weight: 400; letter-spacing: 0; }
+.app-nav { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 4px; }
+.app-nav a { display: flex; align-items: center; min-height: 40px; padding: 9px 12px; border-bottom: 2px solid transparent; font-size: 13px; line-height: 20px; white-space: nowrap; }
+.app-nav a:hover { background: var(--soft); }
+.app-nav a[aria-current=page] { border-bottom-color: var(--pink); font-weight: 700; }
+.page-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 12px; margin-bottom: 20px; }
 .history { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 12px; align-items: center; font-size: 12px; }
 .history label { font-family: var(--mono); }
 .history input[type=date] { width: 155px; }
@@ -102,6 +106,7 @@ tr:hover td { background: #fafaf8; }
 .option-name { font-size: 12px; margin-top: 8px; padding-left: 10px; border-left: 2px solid var(--pink); overflow-wrap: anywhere; }
 .source-info { font-family: var(--mono); font-size: 10px; margin-top: 12px; line-height: 1.6; }
 .name-input { font-size: 13px; font-weight: 540; }
+.sku-barcode { display: block; margin-top: 4px; color: #555; font-size: 11px; line-height: 16px; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .name-origin { display: flex; flex-wrap: wrap; gap: 5px 12px; margin-top: 7px; }
 .name-origin-label { display: inline-flex; align-items: center; gap: 5px; font-size: 10px; line-height: 1.5; color: #555; }
 .name-origin-label::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: #92928f; flex-shrink: 0; }
@@ -150,11 +155,12 @@ footer span:first-child { margin-right: auto; }
 .job-toggle:hover:not(:disabled) { background: transparent; text-decoration: underline; }
 .day-job-title .review-actions button { font-size: 12px; padding: 10px 16px; }
 @media (max-width: 1100px) {
-  .brand-caption { display: none; }
   .toolbar { align-items: start; flex-wrap: wrap; }
   .table-footer span:last-child { display: none; }
 }
 @media (max-width: 960px) {
+  .header { flex-wrap: wrap; gap: 4px 16px; }
+  .app-nav { flex-basis: 100%; justify-content: flex-start; }
   main { padding: 24px 24px 0; }
   .upload-layout { grid-template-columns: 1fr 240px; gap: 24px; }
   .metrics { grid-template-columns: repeat(2, 1fr); }
@@ -163,9 +169,11 @@ footer span:first-child { margin-right: auto; }
   footer { padding-left: 24px; padding-right: 24px; }
 }
 @media (max-width: 700px) {
-  .header { padding: 16px 24px; align-items: start; gap: 16px; }
+  .header { padding: 12px 16px; }
   .brand { font-size: 21px; gap: 8px; }
-  .history { flex-direction: column; align-items: end; gap: 8px; }
+  .app-nav { gap: 0; }
+  .app-nav a { padding-inline: 8px; font-size: 12px; }
+  .history { gap: 8px; justify-content: flex-start; }
   .history label { display: none; }
   .history select, .history input[type=date] { width: 155px; min-width: 155px; max-width: 155px; min-height: 44px; font-size: 12px; }
   #new-batch-button { font-size: 12px; padding: 10px 16px; }

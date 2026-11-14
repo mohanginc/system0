@@ -1,0 +1,461 @@
+{
+  "source": {
+    "name": "skuid_babestellar.xls",
+    "sha256": "bd3e2ee2da9d90801ab251b7b7d4c607ffc1329880943d8466e350b65e69b304",
+    "sheet": "Sheet1"
+  },
+  "entries": [
+    {
+      "barcode": "8809538930177",
+      "product": "베이비스텔라 21도 분유전용 수유쿠션 라운지",
+      "design": "",
+      "option": "",
+      "condition": "정상",
+      "sourceRow": 3,
+      "enabled": true,
+      "aliases": [
+        "역류방지 21도 분유전용 바닥용 수유쿠션 라운지",
+        "분유전용 수유쿠션 21도 바닥용 라운지",
+        "바닥용 21도 분유쿠션 라운지"
+      ]
+    },
+    {
+      "barcode": "8809538930146",
+      "product": "분유전용수유쿠션 세컨드리뉴얼",
+      "design": "",
+      "option": "",
+      "condition": "정상",
+      "sourceRow": 4,
+      "enabled": true,
+      "aliases": [
+        "21도 역류방지 분유전용 수유쿠션 세컨드 리뉴얼",
+        "21도 분유전용 바닥용 수유쿠션 라운지 캥거루 2차 리뉴얼",
+        "21도 분유전용 수유쿠션 2차 리뉴얼",
+        "역류방지 21도 분유전용 수유쿠션 2차 리뉴얼",
+        "[인스타그램이벤트]분유전용 수유쿠션 21도 세컨드 리뉴얼",
+        "분유전용 수유쿠션 21도 2차 리뉴얼",
+        "분유전용 수유쿠션 21도 세컨드 리뉴얼"
+      ]
+    },
+    {
+      "barcode": "8809538930375",
+      "product": "분유전용수유쿠션 세컨드리뉴얼",
+      "design": "",
+      "option": "",
+      "condition": "리퍼",
+      "sourceRow": 5,
+      "enabled": true,
+      "aliases": []
+    },
+    {
+      "barcode": "8809538930368",
+      "product": "분유전용수유쿠션 써드리뉴얼",
+      "design": "",
+      "option": "",
+      "condition": "정상",
+      "sourceRow": 6,
+      "enabled": true,
+      "aliases": [
+        "21도 역류방지 분유전용 수유쿠션 써드 리뉴얼",
+        "분유전용 수유쿠션 21도 써드 리뉴얼",
+        "21도 분유전용 수유쿠션 3차 리뉴얼",
+        "[베라쇼]분유전용 수유쿠션 21도 3차 리뉴얼",
+        "역류방지 21도 분유전용 수유쿠션 3차 리뉴얼"
+      ]
+    },
+    {
+      "barcode": "8809538930160",
+      "product": "완전밀착 수유쿠션",
+      "design": "면100수 누빔 새싹 자수",
+      "option": "13",
+      "condition": "정상",
+      "sourceRow": 8,
+      "enabled": true,
+      "aliases": [
+        "완전밀착 새싹(면100수) D타입 High(13cm)",
+        "완전밀착 새싹(면100수) 하드 쿠션 High(13cm)",
+        "[coupang]완전밀착  새싹(면100수) D타입 High(13cm)",
+        "[coupang]완전밀착 새싹(면100수) D타입 High(13cm)",
+        "[맞교환]완전밀착 새싹(면100수) D타입  High(13cm)",
+        "[주소변경]완전밀착 새싹(면100수) D타입 High(13cm)"
+      ]
+    },
+    {
+      "barcode": "8809538930184",
+      "product": "완전밀착 수유쿠션",
+      "design": "면100수 누빔 새싹 자수",
+      "option": "15",
+      "condition": "정상",
+      "sourceRow": 9,
+      "enabled": true,
+      "aliases": [
+        "완전밀착 새싹(면100수) D타입 Super High(15cm)",
+        "완전밀착 새싹(면100수) 하드 쿠션 Super High(15cm)",
+        "[coupang]완전밀착 새싹(면100수) D타입 Super High(15cm)",
+        "완전밀착 새싹(면100수) 고밀도 모션폼 Super High(15cm)",
+        "[쿠팡]완전밀착 새싹(면100수) D타입 Super High(15cm)",
+        "[맞교환]완전밀착 새싹(면100수) D타입 Ultra High(17cm) -> 수퍼하이 15cm",
+        "[맞교환]완전밀착 새싹(면100수) D타입 Ultra High(17cm)-> D타입 Super High(15cm)",
+        "[맞교환]완전밀착 새싹(면100수) D타입 Ultra High(17cm)->수퍼하이 15"
+      ]
+    },
+    {
+      "barcode": "8809538930191",
+      "product": "완전밀착 수유쿠션",
+      "design": "면100수 누빔 새싹 자수",
+      "option": "17",
+      "condition": "정상",
+      "sourceRow": 10,
+      "enabled": true,
+      "aliases": [
+        "완전밀착 새싹(면100수) D타입 Ultra High(17cm)",
+        "완전밀착 새싹(면100수) 하드 쿠션 Ultra High(17cm)",
+        "완전밀착 새싹 D타입 Ultra High(17cm)"
+      ]
+    },
+    {
+      "barcode": "8809538930207",
+      "product": "완전밀착 수유쿠션",
+      "design": "면100수 누빔 새싹 자수",
+      "option": "13",
+      "condition": "리퍼",
+      "sourceRow": 11,
+      "enabled": true,
+      "aliases": [
+        "완전밀착 새싹(면100수) D타입 High(13cm) 리퍼"
+      ]
+    },
+    {
+      "barcode": "8809538930214",
+      "product": "완전밀착 수유쿠션",
+      "design": "면100수 누빔 새싹 자수",
+      "option": "15",
+      "condition": "리퍼",
+      "sourceRow": 12,
+      "enabled": true,
+      "aliases": [
+        "완전밀착 새싹(면100수) D타입 Super High(15cm) 리퍼",
+        "완전밀착 새싹(면100수) 하드 쿠션 Super High(15cm) 리퍼",
+        "[ 맞교환]완전밀착 새싹(면100수) 하드 쿠션 Super High(15cm) 리퍼"
+      ]
+    },
+    {
+      "barcode": "8809538930221",
+      "product": "완전밀착 수유쿠션",
+      "design": "면100수 누빔 새싹 자수",
+      "option": "17",
+      "condition": "리퍼",
+      "sourceRow": 13,
+      "enabled": true,
+      "aliases": [
+        "완전밀착 새싹(면100수) D타입 Ultra High(17cm) 리퍼",
+        "완전밀착 새싹(면100수) 하드 쿠션 Ultra High(17cm) 리퍼"
+      ]
+    },
+    {
+      "barcode": "8809538930153",
+      "product": "양손프리수유쿠션",
+      "design": "면100수 누빔 새싹 자수",
+      "option": "기본형3룸솜속통",
+      "condition": "정상",
+      "sourceRow": 15,
+      "enabled": true,
+      "aliases": [
+        "양손프리 새싹(면100수) 3룸솜속통",
+        "[coupang]양손프리 새싹(면100수) 3룸솜속통",
+        "양손프리 새싹(면100수) 3룸솜속통 6개",
+        "양손프리 새싹(면100수) 기본3룸 솜속통"
+      ]
+    },
+    {
+      "barcode": "8809538930238",
+      "product": "양손프리수유쿠션",
+      "design": "면100수 누빔 새싹 자수",
+      "option": "쿠션펌속통",
+      "condition": "정상",
+      "sourceRow": 16,
+      "enabled": true,
+      "aliases": [
+        "양손프리 새싹(면100수) 쿠션펌",
+        "양손프리 새싹(면100수) 쿠션펌 속통"
+      ]
+    },
+    {
+      "barcode": "8809538930245",
+      "product": "양손프리수유쿠션",
+      "design": "면100수 누빔 새싹 자수",
+      "option": "하드쿠션 13",
+      "condition": "정상",
+      "sourceRow": 17,
+      "enabled": true,
+      "aliases": [
+        "[coupang]양손프리 새싹(면100수) 하드 쿠션 High(13cm)",
+        "양손프리 새싹(면100수) 하드 쿠션 High(13cm)",
+        "[쿠팡]양손프리 새싹(면100수) 하드 쿠션 High(13cm)",
+        "[coupang]양손프리 새싹(면100수) 하드 쿠션 High(13cm)-2개",
+        "[베라쇼]양손프리 새싹(면100수) 하드 쿠션 High(13cm)"
+      ]
+    },
+    {
+      "barcode": "8809538930252",
+      "product": "양손프리수유쿠션",
+      "design": "면100수 누빔 새싹 자수",
+      "option": "하드쿠션 15",
+      "condition": "정상",
+      "sourceRow": 18,
+      "enabled": true,
+      "aliases": [
+        "양손프리 새싹(면100수) 하드 쿠션 Super High(15cm)",
+        "[coupang]양손프리 새싹(면100수) 하드 쿠션 Super High(15cm)",
+        "[베라쇼]양손프리 새싹(면100수) 하드 쿠션 Super High(15cm)",
+        "[쿠팡]양손프리 새싹(면100수) 하드 쿠션 Super High(15cm)"
+      ]
+    },
+    {
+      "barcode": "8809538930269",
+      "product": "양손프리수유쿠션",
+      "design": "면100수 누빔 새싹 자수",
+      "option": "하드쿠션 17",
+      "condition": "정상",
+      "sourceRow": 19,
+      "enabled": true,
+      "aliases": [
+        "양손프리 새싹(면100수) 하드 쿠션 Ultra High(17cm)",
+        "[coupang]양손프리 새싹(면100수) 하드 쿠션 Ultra High(17cm)",
+        "[쿠팡]양손프리 새싹(면100수) 하드 쿠션 Ultra High(17cm)",
+        "[베라쇼]양손프리 새싹(면100수) 하드 쿠션 Ultra High(17cm)",
+        "[베라쇼] 양손프리 새싹(면100수) 하드 쿠션 Ultra High(17cm)"
+      ]
+    },
+    {
+      "barcode": "8809538930276",
+      "product": "양손프리수유쿠션",
+      "design": "면100수 누빔 새싹 자수",
+      "option": "기본형3룸솜속통",
+      "condition": "리퍼",
+      "sourceRow": 20,
+      "enabled": true,
+      "aliases": []
+    },
+    {
+      "barcode": "8809538930283",
+      "product": "양손프리수유쿠션",
+      "design": "면100수 누빔 새싹 자수",
+      "option": "쿠션펌속통",
+      "condition": "리퍼",
+      "sourceRow": 21,
+      "enabled": true,
+      "aliases": [
+        "양손프리 새싹(면100수) 쿠션펌 리퍼"
+      ]
+    },
+    {
+      "barcode": "8809538930290",
+      "product": "양손프리수유쿠션",
+      "design": "면100수 누빔 새싹 자수",
+      "option": "하드쿠션 15",
+      "condition": "리퍼",
+      "sourceRow": 22,
+      "enabled": true,
+      "aliases": [
+        "양손프리 새싹(면100수) 하드 쿠션 Super High(15cm) 리퍼"
+      ]
+    },
+    {
+      "barcode": "8809538930139",
+      "product": "완전밀착 D자형 높은 수유쿠션",
+      "design": "면20수 파스텔 ",
+      "option": "13",
+      "condition": "정상",
+      "sourceRow": 26,
+      "enabled": true,
+      "aliases": [
+        "완전밀착 파스텔(면20수) D타입 High(13cm)",
+        "[coupang]완전밀착 파스텔(면20수) D타입 High(13cm)",
+        "완전밀착 파스텔(면20수) 하드 쿠션 High(13cm)",
+        "[쿠팡]완전밀착 파스텔(면20수) D타입 High(13cm)"
+      ]
+    },
+    {
+      "barcode": "8809538930306",
+      "product": "완전밀착 D자형 높은 수유쿠션",
+      "design": "면20수 파스텔 ",
+      "option": "15",
+      "condition": "정상",
+      "sourceRow": 27,
+      "enabled": true,
+      "aliases": [
+        "완전밀착 파스텔(면20수) D타입 Super High(15cm)",
+        "완전밀착 파스텔(면20수) 하드 쿠션 Super High(15cm)",
+        "[coupang]완전밀착 파스텔(면20수) D타입 Super High(15cm)",
+        "[쿠팡]완전밀착 파스텔(면20수) D타입 Super High(15cm)",
+        "[쿠팡]완전밀착 파스텔(면20수) Super High(15cm)"
+      ]
+    },
+    {
+      "barcode": "8809538930313",
+      "product": "완전밀착 D자형 높은 수유쿠션",
+      "design": "면20수 파스텔 ",
+      "option": "13",
+      "condition": "리퍼",
+      "sourceRow": 28,
+      "enabled": true,
+      "aliases": []
+    },
+    {
+      "barcode": "8809538930320",
+      "product": "완전밀착 D자형 높은 수유쿠션",
+      "design": "면20수 파스텔 ",
+      "option": "15",
+      "condition": "리퍼",
+      "sourceRow": 29,
+      "enabled": true,
+      "aliases": [
+        "완전밀착 파스텔(면20수) D타입 Super High(15cm) 리퍼"
+      ]
+    },
+    {
+      "barcode": "8809538930122",
+      "product": "양손프리 수유쿠션",
+      "design": "면20수 스위트하트",
+      "option": "기본형3룸솜속통",
+      "condition": "정상",
+      "sourceRow": 30,
+      "enabled": true,
+      "aliases": [
+        "양손프리 스위트하트(면20수) 3룸솜속통",
+        "양손프리 스위트하트(면20수) 기본형 3룸 속통",
+        "[coupang]양손프리 스위트하트(면20수) 3룸솜속통",
+        "[쿠팡]양손프리 스위트하트(면20수) 3룸솜속통"
+      ]
+    },
+    {
+      "barcode": "8809538930337",
+      "product": "양손프리 수유쿠션",
+      "design": "면20수 스위트하트",
+      "option": "쿠션펌속통",
+      "condition": "정상",
+      "sourceRow": 31,
+      "enabled": true,
+      "aliases": []
+    },
+    {
+      "barcode": "8809538930344",
+      "product": "양손프리 수유쿠션",
+      "design": "면20수 스위트하트",
+      "option": "하드쿠션 13",
+      "condition": "정상",
+      "sourceRow": 32,
+      "enabled": true,
+      "aliases": [
+        "양손프리 스위트하트(면20수) 하드 쿠션 High(13cm)",
+        "[베라쇼]양손프리 스위트하트(면20수) 하드 쿠션 High(13cm)"
+      ]
+    },
+    {
+      "barcode": "8809538930351",
+      "product": "양손프리 수유쿠션",
+      "design": "면20수 스위트하트",
+      "option": "하드쿠션 15",
+      "condition": "정상",
+      "sourceRow": 33,
+      "enabled": true,
+      "aliases": [
+        "양손프리 스위트하트(면20수) 하드 쿠션 Super High(15cm)",
+        "[베라쇼]양손프리 스위트하트(면20수) 하드 쿠션 Super High(15cm)",
+        "[쿠팡]양손프리 스위트하트(면20수) 하드 쿠션 Super High(15cm)",
+        "[coupang]양손프리 스위트하트(면20수) 하드 쿠션 Super High(15cm)"
+      ]
+    },
+    {
+      "barcode": "8809538930115",
+      "product": "휴대용수유쿠션 오리온 미니",
+      "design": "",
+      "option": "",
+      "condition": "",
+      "sourceRow": 35,
+      "enabled": true,
+      "aliases": []
+    },
+    {
+      "barcode": "8809538930108",
+      "product": "(주)모행 베이비스텔라 ",
+      "design": "",
+      "option": "",
+      "condition": "",
+      "sourceRow": 36,
+      "enabled": false,
+      "aliases": []
+    },
+    {
+      "barcode": "8809538930092",
+      "product": "벨라 역류방지 수유쿠션",
+      "design": "",
+      "option": "",
+      "condition": "",
+      "sourceRow": 37,
+      "enabled": true,
+      "aliases": []
+    },
+    {
+      "barcode": "8809538930085",
+      "product": "제미니 차콜 골드라벨",
+      "design": "",
+      "option": "",
+      "condition": "",
+      "sourceRow": 38,
+      "enabled": true,
+      "aliases": []
+    },
+    {
+      "barcode": "8809538930078",
+      "product": "에어와플인견쿨매트",
+      "design": "",
+      "option": "",
+      "condition": "",
+      "sourceRow": 39,
+      "enabled": true,
+      "aliases": []
+    },
+    {
+      "barcode": "8809538930061",
+      "product": "베이비스텔라 역류방지 무중력 베드 제로지(,Zero-G)",
+      "design": "",
+      "option": "",
+      "condition": "",
+      "sourceRow": 40,
+      "enabled": true,
+      "aliases": []
+    },
+    {
+      "barcode": "8809538930054",
+      "product": "3차원수유쿠션용 패드",
+      "design": "",
+      "option": "",
+      "condition": "",
+      "sourceRow": 41,
+      "enabled": true,
+      "aliases": []
+    },
+    {
+      "barcode": "8809538930047",
+      "product": "레오 베이지 수유쿠션",
+      "design": "",
+      "option": "",
+      "condition": "",
+      "sourceRow": 42,
+      "enabled": true,
+      "aliases": []
+    },
+    {
+      "barcode": "8809538930030",
+      "product": "제미니 차콜 수유쿠션",
+      "design": "",
+      "option": "",
+      "condition": "",
+      "sourceRow": 43,
+      "enabled": true,
+      "aliases": []
+    }
+  ]
+}
