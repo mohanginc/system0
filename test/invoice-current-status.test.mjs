@@ -162,7 +162,9 @@ test('현재 내역은 제외 결정과 두 실물 송장 후보를 유지하고
   assert.equal(detail.currentOrders[0].latestStatus.readonly, false);
   let reviewed = await h.request(`/api/invoices/${detail.run.id}/items`, json('PATCH', { changes: [{ id: detail.items[0].id, decision: 'exclude', note: '가상 제외' }] }));
   assert.equal(reviewed.status, 200); assert.equal((await reviewed.json()).currentOrders[0].state, 'excluded');
-  reviewed = await h.request(`/api/invoices/${detail.run.id}/items`, json('PATCH', { changes: [{ id: detail.items[0].id, decision: 'include', note: '' }] })); assert.equal(reviewed.status, 200);
+  const view = invoiceView(h.db, detail.run.id);
+  reviewed = await h.request(`/api/invoices/${detail.run.id}/tracking`, json('POST', { expectedVersion: view.viewVersion,
+    choices: [{ key: view.trackingReview.groups[0].key, trackingNumber: row.trackingNumber, mode: 'split' }] })); assert.equal(reviewed.status, 200);
   for (const [remote, expected] of [[{ status: 'RETURNED', remainQuantity: 0 }, 'returned'], [{ status: 'CANCELED', remainQuantity: 0 }, 'canceled'], [{ recipient: '가상 다른 수취인' }, 'attention']]) {
     h.state.changes.set(row.productOrderId, remote); await h.check(detail.run.id);
     assert.equal(invoiceView(h.db, detail.run.id).currentOrders[0].state, expected);

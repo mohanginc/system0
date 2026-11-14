@@ -8,7 +8,7 @@ let dayBatches = [], previewOrders = [], previewReady = false, selectedSourceDat
 let showRecentHistory = false;
 let dateCheckAvailable = false;
 const selectedBatches = new Map();
-const itemChanges = new Map(), issueChanges = new Map();
+const itemChanges = new Map(), issueChanges = new Map(), trackingChanges = new Map();
 const registrationLabels = { unchecked: '등록 미조회', pending: '등록 미확인', complete: '등록 확인 완료', conflict: '송장 불일치' };
 const historyRegistrationLabels = { unchecked: '네이버 등록 미조회', pending: '네이버 미등록', partial: '네이버 일부 등록', complete: '네이버 등록 확인 완료', conflict: '네이버 송장 확인 필요' };
 const outsideLabels = { external_registered: '네이버 등록 확인 완료', pending: '발송대기 · 파일 누락 가능성', canceled: '취소 확인', returned: '반품 확인', attention: '일부 등록·상태 확인 필요', unknown: '등록 여부 미확인', naver_not_applicable: '네이버 조회 대상 아님', exchange: '맞교환 · 별도 출고' };
@@ -22,7 +22,7 @@ function element(tag, text, className) {
 function message(text, error = false) {
   $('message').textContent = text; $('message').hidden = !text; $('message').classList.toggle('error', error);
 }
-function isDirty() { return itemChanges.size > 0 || issueChanges.size > 0; }
+function isDirty() { return itemChanges.size > 0 || issueChanges.size > 0 || trackingChanges.size > 0; }
 function draftItem(item) { return { ...item, ...itemChanges.get(String(item.id)) }; }
 function draftIssue(issue) { return { ...issue, ...issueChanges.get(issue.key) }; }
 function readOnlyOrder(order) { return Boolean(order.latestStatus?.readonly || ['canceled', 'returned'].includes(order.state)); }
@@ -30,17 +30,19 @@ function scopeUnavailable() { return current && (current.scopeRequired || !Array
 function downloadItems() { return (current?.items || []).filter(item => item.decision === 'include' && item.registrationState !== 'complete' && !item.sourceRegistered); }
 function storedDownloadMode() { return current?.run.savedFileAvailable ? 'saved' : 'rebuild'; }
 function primaryDownloadMode() {
-  if (current?.run.generatedAt && current.items.some(item => item.trackingSelection)) return 'rebuild';
+  if (current?.run.generatedAt && (current.items.some(item => item.trackingSelection)
+    || current.trackingReview?.groups.some(group => group.mode))) return 'rebuild';
   if (current?.run.generatedAt && current.currentOrders?.some(readOnlyOrder)) return storedDownloadMode();
   return current?.run.generatedAt && !downloadItems().length ? storedDownloadMode() : 'export';
 }
 function blockingKeys(item) { return item.blockingIssueKeys || (item.issues || []).filter(key => current.issues.some(issue => issue.key === key && issue.blocking)); }
 function refreshControls() {
   const dirty = isDirty(), unresolved = (current?.issues || []).filter(issue => issue.reviewRequired !== false && !issue.resolved).length;
+  const pendingTracking = current?.trackingReview?.pendingCount || 0;
   const exportable = downloadItems().length;
   const blocked = (current?.items || []).some(item => item.decision === 'include' && (item.registrationState === 'conflict' || blockingKeys(item).length));
   const mode = primaryDownloadMode(), included = (current?.items || []).filter(item => item.decision === 'include').length;
-  const needsReview = unresolved > 0 || blocked || scopeUnavailable() || current?.rematchRequired;
+  const needsReview = pendingTracking > 0 || unresolved > 0 || blocked || scopeUnavailable() || current?.rematchRequired;
   for (const control of document.querySelectorAll('button, input, select, textarea')) control.disabled = busy || control.dataset.locked === 'true';
   $('import-button').disabled = busy || !previewReady || !$('naver-files').files.length || !$('courier-files').files.length || !$('carrier').value;
   $('save-button').disabled = busy || !dirty || scopeUnavailable() || current?.rematchRequired;
@@ -55,6 +57,12 @@ function refreshControls() {
   $('date-check-button').disabled = busy || dirty || !dateCheckAvailable;
   $('date-check-button').textContent = checkingRegistration ? '조회 중…' : '등록 상태 확인';
   $('refresh-run').disabled = busy || !current;
+  $('tracking-review-controls').hidden = !current?.trackingReview?.groups.length || scopeUnavailable();
+  $('tracking-review-count').textContent = pendingTracking ? `송장 선택 남음 ${count(pendingTracking)}건` : '송장 선택 완료';
+  if (trackingChanges.size) $('tracking-review-count').textContent += ` · ${count(trackingChanges.size)}건 저장 전`;
+  const replacements = replacementChoices();
+  $('replace-tracking-button').hidden = !replacements.length;
+  $('replace-tracking-button').disabled = busy || dirty || !replacements.length;
   $('dirty-note').textContent = dirty ? '검토 내용이 변경되었습니다. 저장해 주세요.' : '';
   if (current) {
     const generated = Boolean(current.run.generatedAt);
@@ -65,6 +73,7 @@ function refreshControls() {
   if (current) $('export-note').textContent = dirty ? '변경한 검토 내용을 먼저 저장하세요.'
     : mode === 'saved' ? '이미 생성한 파일을 그대로 다시 내려받습니다. 네이버 등록 상태는 아래에서 확인하세요.'
     : current.rematchRequired ? '다른 날짜의 주문까지 확인하려면 같은 ①·③ 파일을 다시 선택해 매칭하세요.'
+    : pendingTracking ? `송장 선택 ${count(pendingTracking)}건이 남았습니다. 교체 또는 분할 상자를 선택한 뒤 저장하세요.`
     : unresolved ? '주문 행의 경고를 확인한 뒤 검토 내용을 저장하세요. 메모는 선택 사항입니다.'
     : blocked ? '연결 근거가 부족하거나 등록 송장이 다른 포함 항목을 보류·제외해 주세요.'
     : mode === 'rebuild' ? `현재 매칭 ${count(included)}건으로 새 엑셀을 만듭니다. 등록 완료 건도 포함됩니다.`
@@ -80,7 +89,7 @@ async function api(url, options = {}) {
 }
 function allowDiscard() { return !isDirty() || window.confirm('저장하지 않은 검토 내용이 있습니다. 변경 내용을 버리고 이동할까요?'); }
 function clearMatch() {
-  current = null; itemChanges.clear(); issueChanges.clear(); $('run-section').hidden = true; $('preview-section').hidden = false;
+  current = null; itemChanges.clear(); issueChanges.clear(); trackingChanges.clear(); $('run-section').hidden = true; $('preview-section').hidden = false;
   $('saved-files').hidden = true; $('import-form').hidden = false; $('import-form').reset();
   $('naver-file-list').textContent = '선택한 파일이 없습니다. 여러 파일을 함께 올릴 수 있습니다.';
   $('courier-file-list').textContent = '송장번호가 들어 있는 택배사 출력파일을 선택하세요.';
@@ -218,8 +227,9 @@ function warningReview(issues, showLocation = false) {
     if (issue.source) location.push([issue.source.sourceFile, issue.source.sourceSheet,
       issue.source.sourceRow !== undefined ? `${issue.source.sourceRow}행` : ''].filter(Boolean).join(' · '));
     if (showLocation && location.length) description.append(element('small', location.filter(Boolean).join('\n')));
-    if (issue.kind === 'registration_recheck') {
-      description.append(element('small', '하단의 등록 상태 확인을 눌러 현재 상태를 다시 조회하세요.'));
+    if (['registration_recheck', 'tracking_review_required'].includes(issue.kind)) {
+      description.append(element('small', issue.kind === 'tracking_review_required' ? '적용 송장과 교체·분할 상자를 선택하세요.'
+        : '하단의 등록 상태 확인을 눌러 현재 상태를 다시 조회하세요.'));
       row.append(description); return row;
     }
     if (!missingOrder) description.append(element('small', issue.blocking
@@ -342,27 +352,58 @@ function shipmentHistory(items) {
   }
   return history;
 }
+function saveTrackingDraft(group, fields) {
+  const next = { trackingNumber: group.selectedTrackingNumber || '', mode: group.mode || '', ...trackingChanges.get(group.key), ...fields };
+  if (next.mode === 'replace' && !group.candidates.some(candidate => candidate.trackingNumber === next.trackingNumber && candidate.currentFile)
+    || next.mode === 'split' && group.splitEligible === false) next.mode = '';
+  if (next.trackingNumber === (group.selectedTrackingNumber || '') && next.mode === (group.mode || '')) trackingChanges.delete(group.key);
+  else trackingChanges.set(group.key, { key: group.key, ...next });
+  renderItems(); refreshControls();
+}
+function replacementChoices() {
+  return (current?.trackingReview?.groups || []).filter(group => group.needsSelection && group.replacementEligible && group.replacementTrackingNumber)
+    .map(group => ({ key: group.key, trackingNumber: group.replacementTrackingNumber, mode: 'replace' }));
+}
 function trackingChoices(order, linked) {
-  const group = element('div');
-  for (const number of order.trackingNumbers) {
-    if (order.trackingNumbers.length < 2 || !linked.length) { group.append(element('strong', number)); continue; }
-    const label = element('label', undefined, 'tracking-choice'), checkbox = element('input');
-    checkbox.type = 'checkbox'; checkbox.className = 'tracking-choice-input';
-    checkbox.setAttribute('aria-label', `적용 송장 ${number}`);
-    const selectable = linked.every(item => item.physicalShipments?.some(shipment => shipment.trackingNumber === number && shipment.valid === true));
-    checkbox.dataset.locked = String(!selectable); checkbox.disabled = busy || !selectable;
-    checkbox.checked = linked.every(item => (draftItem(item).selectedTrackingNumber || item.trackingSelection?.trackingNumber) === number);
-    checkbox.addEventListener('change', () => {
-      for (const item of linked) {
-        const canInclude = item.registrationState !== 'conflict' && !item.sourceRegistered && blockingKeys(item).every(key => current.issues.some(issue => issue.key === key && ['legacy_conflict', 'courier_conflict'].includes(issue.kind)));
-        saveItemDraft(item, { selectedTrackingNumber: checkbox.checked ? number : undefined,
-          decision: checkbox.checked && canInclude ? 'include' : item.decision });
-      }
-      renderItems(); refreshControls();
-    });
-    label.append(checkbox, element('strong', number)); group.append(label);
+  const container = element('div');
+  const groups = (current?.trackingReview?.groups || []).filter(group => group.itemIds.some(id => linked.some(item => item.id === id)));
+  if (!groups.length) {
+    for (const number of order.trackingNumbers) container.append(element('strong', number));
+    return container;
   }
-  return group;
+  for (const group of groups) {
+    if (!group.needsSelection && !(group.mode === 'split' && group.splitEligible)) {
+      const selected = group.selectedTrackingNumber || linked.find(item => group.itemIds.includes(item.id))?.trackingNumber || order.trackingNumbers[0] || '';
+      container.append(element('strong', selected));
+      if (group.mode) container.append(element('small', group.mode === 'replace' ? '교체 적용' : '분할 상자 · 대표 송장'));
+      continue;
+    }
+    const draft = { trackingNumber: group.selectedTrackingNumber || '', mode: group.mode || '', ...trackingChanges.get(group.key) };
+    const controls = element('div', undefined, 'tracking-review-choice'), numberLabel = element('label', '적용 송장'), number = element('select');
+    number.setAttribute('aria-label', `${order.recipient || group.internalId} 적용 송장`);
+    number.add(new Option('송장 선택', ''));
+    for (const candidate of group.candidates) {
+      const label = [candidate.trackingNumber, candidate.round ? `${candidate.round}차` : '', candidate.printedAt
+        ? /^\d{2}:\d{2}:\d{2}$/.test(candidate.printedAt) ? candidate.printedAt : formatTime(candidate.printedAt) : ''].filter(Boolean).join(' · ');
+      const option = new Option(label, candidate.trackingNumber); option.disabled = candidate.valid === false || candidate.selectable === false;
+      number.add(option);
+    }
+    number.value = draft.trackingNumber;
+    number.addEventListener('change', () => saveTrackingDraft(group, { trackingNumber: number.value }));
+    const modeLabel = element('label', '송장 처리'), mode = element('select');
+    mode.setAttribute('aria-label', `${order.recipient || group.internalId} 송장 처리`);
+    mode.add(new Option('교체·분할 선택', ''));
+    const replace = new Option('교체 · 선택한 송장만 사용', 'replace');
+    replace.disabled = group.replaceEligible === false || !group.candidates.some(candidate => candidate.trackingNumber === draft.trackingNumber && candidate.currentFile);
+    const split = new Option('분할 상자 · 대표 송장 선택', 'split'); split.disabled = group.splitEligible === false;
+    mode.add(replace); mode.add(split);
+    mode.value = draft.mode;
+    mode.addEventListener('change', () => saveTrackingDraft(group, { mode: mode.value }));
+    numberLabel.append(number); modeLabel.append(mode); controls.append(numberLabel, modeLabel);
+    if (group.reason && group.needsSelection) controls.append(element('small', group.reason, 'match-reason'));
+    container.append(controls);
+  }
+  return container;
 }
 function displayedOrders() {
   const orders = scopeUnavailable() ? previewOrders : current?.currentOrders || current?.orders || previewOrders;
@@ -503,7 +544,7 @@ function renderUnmatched() {
 }
 function showRun(data) {
   data.rematchRequired ??= !data.run.matchingVersion;
-  current = data; itemChanges.clear(); issueChanges.clear(); $('upload-section').hidden = false; $('preview-section').hidden = true; $('run-section').hidden = false;
+  current = data; itemChanges.clear(); issueChanges.clear(); trackingChanges.clear(); $('upload-section').hidden = false; $('preview-section').hidden = true; $('run-section').hidden = false;
   renderPreview();
   const dates = [...new Set((data.batches || []).map(batch => workDate(batch.createdAt)))].sort();
   $('source-message').textContent = `처리 날짜 ${data.run.sourceDate || selectedSourceDate} · ${dates.length ? `원본 날짜 ${dates.join(' · ')}` : '연결된 저장 원본 없음'} · ① 네이버 파일 기준으로 매칭합니다.`;
@@ -537,7 +578,7 @@ async function loadRun(id) {
   try {
     const data = await api(`/api/invoices/${encodeURIComponent(id)}`);
     const date = data.run.sourceDate || workDate(data.batches?.[0]?.createdAt || data.run.createdAt);
-    if (date !== selectedSourceDate) { $('source-date').value = date; await loadSourceDate({ discardConfirmed: true, restoreSaved: false }); setBusy(true); }
+    if (!previewReady || date !== selectedSourceDate) { $('source-date').value = date; await loadSourceDate({ discardConfirmed: true, restoreSaved: false }); setBusy(true); }
     showRun(data); message('');
   }
   catch (error) { message(error.message, true); }
@@ -556,10 +597,54 @@ async function saveReview() {
   if (busy || !current || !isDirty()) return;
   const resolutions = [...issueChanges.values()];
   if (resolutions.some(issue => !issue.resolved && issue.note.trim())) { message('메모를 입력한 경고의 확인란도 선택해 주세요.', true); return; }
+  const choices = [...trackingChanges.values()];
+  if (choices.some(choice => !choice.trackingNumber || !['replace', 'split'].includes(choice.mode))) {
+    message('적용 송장과 교체·분할 상자 처리 방식을 모두 선택해 주세요.', true); return;
+  }
   const body = { changes: [...itemChanges.values()], issueResolutions: resolutions.filter(issue => issue.resolved).map(({ key, note }) => ({ key, note })) };
+  let next = current, trackingSaved = false, reviewSaved = false;
   setBusy(true); message('검토 내용을 저장하고 있습니다.');
-  try { showRun(await api(`/api/invoices/${current.run.id}/items`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })); message('검토 내용을 저장했습니다.'); await loadHistory(); }
-  catch (error) { message(error.message, true); }
+  try {
+    if (choices.length) {
+      next = await api(`/api/invoices/${current.run.id}/tracking`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ expectedVersion: current.viewVersion, choices }) });
+      trackingSaved = true; trackingChanges.clear();
+      body.changes = body.changes.map(change => change.decision === current.items.find(item => item.id === change.id)?.decision
+        ? { ...change, decision: next.items.find(item => item.id === change.id)?.decision || change.decision } : change);
+    }
+    body.issueResolutions = body.issueResolutions.filter(issue => next.issues.some(value => value.key === issue.key));
+    if (body.changes.length || body.issueResolutions.length) {
+      next = await api(`/api/invoices/${next.run.id}/items`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+    }
+    reviewSaved = true;
+    showRun(next); message('검토 내용을 저장했습니다.'); await loadHistory();
+  } catch (error) {
+    if (trackingSaved && !reviewSaved && (body.changes.length || body.issueResolutions.length)) {
+      showRun(next);
+      for (const change of body.changes) itemChanges.set(String(change.id), change);
+      for (const issue of resolutions) if (next.issues.some(value => value.key === issue.key)) issueChanges.set(issue.key, issue);
+      renderItems(); renderIssues(); refreshControls();
+    }
+    message(reviewSaved ? `검토 내용은 저장되었습니다. ${error.message}` : trackingSaved ? `송장 선택은 저장되었습니다. ${error.message}` : error.message, true);
+  }
+  finally { setBusy(false); }
+}
+async function replaceCurrentTracking() {
+  if (busy || !current || isDirty()) return;
+  const choices = replacementChoices();
+  if (!choices.length) return;
+  const groups = current.trackingReview.groups.filter(group => choices.some(choice => choice.key === group.key));
+  const products = new Set(groups.flatMap(group => group.productOrderIds));
+  const targets = groups.map(group => `${group.recipient || group.internalId} → ${group.replacementTrackingNumber}`).join('\n');
+  if (!window.confirm(`이번 파일의 송장으로 내부 출고 ${count(groups.length)}건 · 상품주문 ${count(products.size)}건을 교체할까요?\n\n${targets}\n\n이전 송장은 이력으로 남습니다.`)) return;
+  setBusy(true); message('이번 파일의 송장으로 교체하고 있습니다.');
+  try {
+    const next = await api(`/api/invoices/${current.run.id}/tracking`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ expectedVersion: current.viewVersion, choices }) });
+    showRun(next);
+    message(`송장을 교체했습니다.${next.trackingReview.pendingCount ? ` 선택 남음 ${count(next.trackingReview.pendingCount)}건` : ''}`);
+    await loadHistory();
+  } catch (error) { message(error.message, true); }
   finally { setBusy(false); }
 }
 async function downloadExcel(mode = primaryDownloadMode()) {
@@ -616,7 +701,7 @@ async function checkRegistration() {
 }
 function newRun() {
   if (busy || !allowDiscard()) return;
-  current = null; itemChanges.clear(); issueChanges.clear(); $('import-form').reset(); $('search').value = ''; $('item-filter').value = 'all';
+  current = null; itemChanges.clear(); issueChanges.clear(); trackingChanges.clear(); $('import-form').reset(); $('search').value = ''; $('item-filter').value = 'all';
   $('naver-file-list').textContent = '선택한 파일이 없습니다. 여러 파일을 함께 올릴 수 있습니다.';
   $('courier-file-list').textContent = '송장번호가 들어 있는 택배사 출력파일을 선택하세요.';
   $('saved-files').hidden = true; $('import-form').hidden = false;
@@ -649,6 +734,7 @@ $('new-run').addEventListener('click', newRun);
 $('replace-files').addEventListener('click', replaceFiles);
 $('history-toggle').addEventListener('click', toggleHistory);
 $('save-button').addEventListener('click', saveReview);
+$('replace-tracking-button').addEventListener('click', replaceCurrentTracking);
 $('export-button').addEventListener('click', () => downloadExcel());
 $('redownload-button').addEventListener('click', () => downloadExcel(storedDownloadMode()));
 $('check-button').addEventListener('click', checkRegistration);
@@ -674,6 +760,11 @@ async function start() {
     for (const carrier of data.carriers || []) $('carrier').add(new Option(carrier.name, carrier.code));
   } catch { message('택배사 목록을 가져오지 못했습니다. 화면을 새로고침해 주세요.', true); }
   setBusy(false);
-  await loadSourceDate();
+  const requestedRun = new URLSearchParams(window.location.search).get('run');
+  if (requestedRun && /^[1-9]\d*$/.test(requestedRun) && Number.isSafeInteger(Number(requestedRun))) {
+    await loadRun(Number(requestedRun));
+  } else {
+    await loadSourceDate();
+  }
 }
 start();

@@ -1,6 +1,25 @@
 # system0
 
-주문 엑셀의 상품명을 정리하는 로컬 원페이지 앱입니다. HTML·CSS·JavaScript, Node.js, SQLite로 구성하며, 현재는 일반 업무 화면과 API를 제공합니다.
+주문 엑셀의 상품명을 정리하는 앱입니다. HTML·CSS·JavaScript, Node.js, SQLite로 구성하며, 업무 화면과 API 및 디스코드 송장 처리를 제공합니다.
+
+## 디스코드 송장 처리
+
+지정한 직원·텍스트 채널에서 `@system0 네이버 송장 입력용 파일 만들어줘`와 함께 네이버·로젠 파일을 각각 하나씩 첨부합니다. `/송장` 명령도 사용할 수 있습니다. 기존 상품명 작업에 저장된 주문 근거를 사용합니다.
+
+정상 매칭은 엑셀을 반환합니다. 복수 송장은 해당 출고의 **교체** 또는 **분할 대표** 번호를 선택하고 **선택 완료 · 엑셀 만들기**를 누릅니다. 정정 번호만 담은 파일은 “이번 파일의 송장으로 교체해줘”라고 요청하고 표시된 범위를 한 번 확인합니다. 실제 충돌이나 불명확한 연결은 system0 검토 화면에서 확인합니다.
+
+**보관 엑셀 받기**는 생성 당시 파일이며, 변경한 선택은 **현재 매칭으로 새 엑셀**로 받습니다. **최신 상태**, **네이버 등록 확인** 버튼과 `/송장파일`, `/송장상태`, `/등록확인` 명령도 제공합니다. 네이버 실제 송장 등록은 수행하지 않습니다. LLM의 절차 지침은 [채팅 업무 절차](prompts/discord-workflows.md)에서 읽으며 기능 변경 시 관련 대화 검증과 함께 갱신합니다.
+
+1. Discord 개발자 포털에서 `system0` 앱을 만들고 서버에 봇을 초대합니다. 설치 범위는 `bot`, `applications.commands`, 권한은 채널 보기·메시지 보내기·파일 첨부·링크 임베드·메시지 기록 보기입니다. 관리자 권한은 필요하지 않습니다. 봇을 멘션한 메시지만 받으므로 Message Content Intent는 사용하지 않습니다.
+2. Discord 사용자 설정의 고급에서 개발자 모드를 켜고, 서버·사용할 텍스트 채널·직원의 숫자 ID를 복사합니다.
+3. PowerShell에서 `./scripts/configure-discord.ps1`을 실행해 ID와 봇 토큰·네이버 파일 암호를 입력합니다. 토큰은 화면에 표시되지 않으며 `%LOCALAPPDATA%/system0/discord.env`에 저장됩니다. 채팅이나 Git에는 넣지 않습니다. Linux 설정 파일은 `/etc/system0-discord.env`이며 `DISCORD_ENV_FILE`로 경로를 지정할 수 있습니다.
+4. system0 서버를 재시작하고 별도 터미널에서 `npm run discord:start`를 실행합니다. 봇과 system0은 같은 컴퓨터에서 실행하며 `DISCORD_API_BASE`는 해당 로컬 포트입니다. 명령은 지정한 서버에만 등록됩니다.
+
+구글 운영서버는 `scripts/system0-discord.service`를 사용해 봇을 자동 실행합니다. `/etc/system0-discord.env`는 `root:system0`, 권한 `640`으로 두고 `DISCORD_API_BASE=http://127.0.0.1:3000`, `SYSTEM0_PUBLIC_ORIGIN=https://system0.babestellar.com`을 지정합니다. 테스트에서 운영으로 옮길 때는 테스트 봇을 종료하고 내부 연결 키를 새로 생성합니다.
+
+파일은 하나당 10MB이며 `.xls`·`.xlsx`를 지원합니다. 암호화된 네이버 파일은 비공개 설정의 암호로 읽습니다. 자연어 해석은 기존 AI 설정을 사용하며 고정 명령에는 AI가 필요하지 않습니다. 기존 엑셀 보관본은 우선 그대로 반환하고, 화면에서 명시적으로 재생성할 때만 현재 매칭을 사용합니다. 서명된 작업 버튼은 다른 채널로 옮겨 사용할 수 없습니다.
+
+Discord의 [봇 시작 안내](https://docs.discord.com/developers/quick-start/getting-started)와 [앱 설치 안내](https://docs.discord.com/developers/resources/application)를 참고합니다.
 
 ## 운영 컴퓨터 설치
 
@@ -50,7 +69,7 @@ Windows 기본 DB는 `%LOCALAPPDATA%/system0/system0.sqlite`입니다. 이 개�
 
 화면 아래 **데이터 백업**은 실행 중인 DB의 일관된 백업본을 다운로드합니다. 백업본은 OneDrive 등에 보관할 수 있습니다. 복구할 때는 서버를 종료하고 기존 DB를 다른 폴더에 보관합니다. 같은 이름의 `-wal`·`-shm` 파일이 남아 있으면 함께 옮겨 보관한 뒤, 백업본을 설정된 DB 경로에 복사하여 실행합니다. 복구 후 작업 목록과 상품명·검수 내용을 확인하세요. 실행 중인 DB 파일을 직접 동기화하지 않습니다.
 
-기본 서버는 이 컴퓨터의 `127.0.0.1`에서만 접근할 수 있습니다. 같은 서버의 HTTPS 인증 프록시 뒤에서 운영할 때 `SYSTEM0_PUBLIC_ORIGIN=https://system0.babestellar.com`을 지정하면 해당 도메인의 접속과 같은 Origin의 쓰기 요청을 추가로 허용합니다. 끝 슬래시 없이 입력하며, Node.js는 계속 `127.0.0.1`에서만 실행합니다. 이 설정 자체는 로그인 기능이 아니므로 프록시의 직원별 인증을 함께 설정합니다. PostgreSQL과 채팅 연결은 이후 필요할 때 검토합니다.
+기본 서버는 이 컴퓨터의 `127.0.0.1`에서만 접근할 수 있습니다. 같은 서버의 HTTPS 인증 프록시 뒤에서 운영할 때 `SYSTEM0_PUBLIC_ORIGIN=https://system0.babestellar.com`을 지정하면 해당 도메인의 접속과 같은 Origin의 쓰기 요청을 추가로 허용합니다. 끝 슬래시 없이 입력하며, Node.js는 계속 `127.0.0.1`에서만 실행합니다. 이 설정 자체는 로그인 기능이 아니므로 프록시의 직원별 인증을 함께 설정합니다.
 
 ## 검증
 

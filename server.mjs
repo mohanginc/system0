@@ -6,7 +6,7 @@ import { loadEnvFile } from 'node:process';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash, timingSafeEqual } from 'node:crypto';
 import { openDatabase, batchDetail, listBatches, deleteBatch, deleteRows } from './lib/database.mjs';
 import { importFiles, exportDownload } from './lib/excel.mjs';
 import { normalizeBatch, reviseRows } from './lib/naming.mjs';
@@ -14,13 +14,17 @@ import { listLlmPurposes, llmUsage } from './lib/llm.mjs';
 import { shippingBoard, shippingDates } from './lib/shipping.mjs';
 import { createNaverClient } from './lib/naver.mjs';
 import { previewShippingBoard } from './lib/shipping-preview.mjs';
-import { CARRIERS, unlockNaverFiles, importInvoiceFiles, listInvoiceRuns, listInvoiceDrafts, reviseInvoiceItems,
+import { CARRIERS, unlockNaverFiles, classifyInvoiceFiles, prepareInvoiceFile, importInvoiceFiles, listInvoiceRuns, listInvoiceDrafts, reviseInvoiceItems,
   exportInvoices, downloadInvoices, latestInvoice, refreshInvoiceStatus, refreshOutsideInvoiceStatus,
-  invoiceView, invoiceSourceView, invoiceDateRunIds, checkInvoiceDate } from './lib/invoices.mjs';
+  invoiceView, invoiceSourceView, invoiceDateRunIds, checkInvoiceDate, applyInvoiceTrackingReview } from './lib/invoices.mjs';
+import { readDiscordConfig, discordScopeAllowed, discordEnvPath } from './lib/discord-config.mjs';
+import { initializeDiscordWorkflow, claimDiscordRequest, finishDiscordRequest, discordContext, interpretDiscordRequest } from './lib/discord-workflow.mjs';
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 const envFile = process.env.SYSTEM0_ENV_FILE || path.join(projectRoot, '.env');
 if (existsSync(envFile)) loadEnvFile(envFile);
+const discordEnvFile = discordEnvPath();
+if (existsSync(discordEnvFile)) loadEnvFile(discordEnvFile);
 
 export function defaultDatabasePath() {
   const directory = process.platform === 'win32'
@@ -31,7 +35,7 @@ export function defaultDatabasePath() {
 
 export function createApp({ databasePath = process.env.DATABASE_PATH || defaultDatabasePath(),
   model = process.env.OPENAI_MODEL || 'gpt-6.1-sol', client, naver = createNaverClient(),
-  apiKey = process.env.OPENAI_API_KEY, publicOrigin = process.env.SYSTEM0_PUBLIC_ORIGIN || '' } = {}) {
+  apiKey = process.env.OPENAI_API_KEY, publicOrigin = process.env.SYSTEM0_PUBLIC_ORIGIN || '', discordConfig = readDiscordConfig() } = {}) {
   let publicHost = '';
   if (publicOrigin) {
     let url;
@@ -42,6 +46,7 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
     publicHost = url.host;
   }
   const db = openDatabase(databasePath);
+  if (discordConfig) initializeDiscordWorkflow(db);
   const ai = client === undefined ? (apiKey ? new OpenAI({ apiKey, timeout: 120000, maxRetries: 0 }) : null) : client;
   const running = new Set();
   let previewRunning = false;
@@ -62,7 +67,30 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
     response.set('X-Content-Type-Options', 'nosniff');
     next();
   });
+  app.use('/api/discord', (request, response, next) => {
+    if (!discordConfig) return response.status(404).json({ error: '지원하지 않는 API입니다.' });
+    const localHost = /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(request.get('host') || '');
+    const localSocket = /^(::ffff:)?127\.0\.0\.1$|^::1$/.test(request.socket.remoteAddress || '');
+    const key = request.get('X-System0-Discord-Key');
+    if (!localHost || !localSocket || !key || !timingSafeEqual(createHash('sha256').update(key).digest(), createHash('sha256').update(discordConfig.secret).digest())) {
+      return response.status(403).json({ error: '디스코드 내부 연결 권한을 확인해 주세요.' });
+    }
+    response.set('Cache-Control', 'no-store'); next();
+  });
   app.use(express.json({ limit: '2mb' }));
+  app.use('/api/discord', (request, response, next) => {
+    if (!discordScopeAllowed(discordConfig, request.method === 'GET' ? request.query : request.body || {})) {
+      return response.status(403).json({ error: '이 서버·채널 또는 직원에게는 사용 권한이 없습니다.' });
+    }
+    next();
+  });
+  app.post('/api/discord/requests', (request, response) => {
+    const result = claimDiscordRequest(db, request.body);
+    response.status(result.created ? 201 : 200).json({ request: result.request });
+  });
+  app.patch('/api/discord/requests/:requestId', (request, response) => response.json({ request: finishDiscordRequest(db, request.params.requestId, request.body) }));
+  app.get('/api/discord/context', (request, response) => response.json(discordContext(db, request.query)));
+  app.post('/api/discord/interpret', async (request, response) => response.json(await interpretDiscordRequest(db, request.body, ai, model)));
   const excelFileFilter = (_request, file, done) => {
       // Multipart filenames are transmitted as UTF-8 bytes by browsers.
       if ([...file.originalname].every(character => character.codePointAt(0) <= 255)) {
@@ -75,7 +103,7 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024, files: 100, fields: 0 },
     fileFilter: excelFileFilter });
   const invoiceUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024, files: 100, fields: 3 },
-    fileFilter: excelFileFilter }).fields([{ name: 'naverFiles', maxCount: 50 }, { name: 'courierFiles', maxCount: 50 }]);
+    fileFilter: excelFileFilter }).fields([{ name: 'naverFiles', maxCount: 50 }, { name: 'courierFiles', maxCount: 50 }, { name: 'files', maxCount: 50 }]);
   const idFrom = request => {
     const id = Number(request.params.id);
     if (!Number.isSafeInteger(id) || id < 1) throw new Error('작업 번호를 확인해 주세요.');
@@ -123,8 +151,10 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
     if (invoiceChecking.size) return response.status(409).json({ error: '송장 등록 상태를 확인 중입니다. 완료 후 파일을 올려 주세요.' });
     const carrier = CARRIERS.find(value => value.code === request.body?.deliveryCompanyCode);
     if (!carrier) throw new Error('택배사를 선택해 주세요.');
-    const naverFiles = request.files?.naverFiles || [], courierFiles = request.files?.courierFiles || [];
-    if ([...naverFiles, ...courierFiles].reduce((sum, file) => sum + file.size, 0) > 50 * 1024 * 1024) {
+    let naverFiles = request.files?.naverFiles || [], courierFiles = request.files?.courierFiles || [];
+    const genericFiles = request.files?.files || [];
+    if (genericFiles.length && (naverFiles.length || courierFiles.length)) throw new Error('자동 구분 파일과 종류별 파일은 함께 첨부할 수 없습니다.');
+    if ([...naverFiles, ...courierFiles, ...genericFiles].reduce((sum, file) => sum + file.size, 0) > 50 * 1024 * 1024) {
       throw new Error('한 번에 업로드하는 파일의 합계는 50MB까지 가능합니다.');
     }
     let batchIds;
@@ -134,7 +164,8 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
     }
     const sourceDate = request.body?.sourceDate;
     if (sourceDate === undefined && batchIds === undefined) throw new Error('송장 처리 날짜를 선택해 주세요.');
-    const preparedNaverFiles = await unlockNaverFiles(naverFiles, request.body?.naverPassword);
+    if (genericFiles.length) ({ naverFiles, courierFiles } = await classifyInvoiceFiles(genericFiles, request.body?.naverPassword));
+    const preparedNaverFiles = genericFiles.length ? naverFiles : await unlockNaverFiles(naverFiles, request.body?.naverPassword);
     if (invoiceChecking.size) return response.status(409).json({ error: '송장 등록 상태를 확인 중입니다. 완료 후 파일을 올려 주세요.' });
     const detail = importInvoiceFiles(db, { naverFiles: preparedNaverFiles, courierFiles, carrier, batchIds, sourceDate, runningBatchIds: [...running] });
     invoiceChecking.add(detail.run.id);
@@ -161,6 +192,27 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
   app.patch('/api/invoices/:id/items', (request, response) => {
     const id = ensureInvoice(request, response, true);
     if (id) { reviseInvoiceItems(db, id, request.body); response.json(invoiceView(db, id)); }
+  });
+  app.post('/api/invoices/:id/tracking', (request, response) => {
+    const id = ensureInvoice(request, response, true);
+    if (!id) return;
+    try { response.json(applyInvoiceTrackingReview(db, id, request.body)); }
+    catch (error) {
+      if (error.status === 409) response.status(409).json({ error: error.message, code: error.code });
+      else throw error;
+    }
+  });
+  app.post('/api/invoices/:id/file', (request, response) => {
+    const id = ensureInvoice(request, response, true);
+    if (!id) return;
+    if (!request.body || Object.keys(request.body).some(key => !['mode', 'expectedVersion'].includes(key))) throw new Error('파일 생성 방식과 현재 검토 버전만 전달해 주세요.');
+    try {
+      const output = prepareInvoiceFile(db, id, request.body);
+      response.attachment(output.filename).type(output.contentType).send(output.buffer);
+    } catch (error) {
+      if (['stale_invoice_version', 'saved_file_missing'].includes(error.code)) response.status(409).json({ error: error.message, code: error.code });
+      else throw error;
+    }
   });
   app.get('/api/invoices/:id/export', (request, response) => {
     const id = ensureInvoice(request, response, true);
@@ -265,7 +317,8 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
     const message = error instanceof multer.MulterError
       ? (uploadErrors[error.code] || '파일 업로드 요청을 읽지 못했습니다. 선택한 파일과 입력 내용을 확인해 주세요.')
       : error instanceof SyntaxError ? '요청 내용을 읽을 수 없습니다.' : error.message;
-    response.status(400).json({ error: message || '작업에 실패했습니다.' });
+    response.status(error.discordWorkflow ? error.httpStatus : 400).json({ error: message || '작업에 실패했습니다.',
+      ...(error.discordWorkflow ? { code: error.code, ...(error.request ? { request: error.request } : {}) } : {}) });
   });
   return app;
 }

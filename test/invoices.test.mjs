@@ -8,7 +8,8 @@ import * as XLSX from 'xlsx';
 import { openDatabase, deleteBatch, deleteRows } from '../lib/database.mjs';
 import { importFiles } from '../lib/excel.mjs';
 import { CARRIERS, importInvoiceFiles, invoiceDetail, listInvoiceRuns, reviseInvoiceItems,
-  exportInvoices, downloadInvoices, latestInvoice, refreshInvoiceStatus, shipmentInvoiceStates, invoiceOrderSources, listInvoiceDrafts, unlockNaverFiles } from '../lib/invoices.mjs';
+  exportInvoices, downloadInvoices, latestInvoice, refreshInvoiceStatus, shipmentInvoiceStates, invoiceOrderSources, listInvoiceDrafts, unlockNaverFiles,
+  invoiceView, applyInvoiceTrackingReview } from '../lib/invoices.mjs';
 
 const carrier = CARRIERS[0], pid = '202610210000000001', oid = '202610210000000099', internal = '000001', tracking = '45333933352';
 const recipient = '모의 수취인', telephone = '010-1111-2222', address = '서울 강남구 테헤란로 123 (역삼동) 101호';
@@ -146,14 +147,17 @@ test('네이버 동일 상품ID 충돌·동일 내부번호 충돌은 보류하�
   assert.ok(badNaver.issues.some(issue => issue.kind === 'naver_conflict'));
 });
 
-test('명확한 차수의 분할 상자는 먼저인 송장을 대표로 하고 모든 실물 송장과 변경 사유를 보존한다', t => {
+test('직원이 분할 출고와 대표 번호를 확정하면 모든 실물 송장과 선택 이력을 보존한다', t => {
   const db = database(t); seed(db);
   const detail = start(db, undefined, [parcel({ round: 2, trackingNumber: '45333933363' }), parcel({ round: 1 })]);
   assert.equal(detail.items[0].trackingNumber, tracking);
   assert.equal(detail.items[0].physicalShipments.length, 2);
   assert.ok(detail.items[0].physicalShipments.every(item => item.valid === true));
   assert.throws(() => reviseInvoiceItems(db, detail.run.id, { changes: [change(detail.items[0], 'include', '', '45333933363')] }), /사유/);
-  const changed = reviseInvoiceItems(db, detail.run.id, { changes: [change(detail.items[0], 'include', '담당자 대표 송장 선택', '45333933363')] });
+  assert.equal(detail.items[0].decision, 'hold');
+  const view = invoiceView(db, detail.run.id);
+  const changed = applyInvoiceTrackingReview(db, detail.run.id, { expectedVersion: view.viewVersion,
+    choices: [{ key: view.trackingReview.groups[0].key, trackingNumber: '45333933363', mode: 'split' }], actor: '담당자' });
   assert.equal(changed.items[0].trackingNumber, '45333933363');
   assert.equal(db.prepare('SELECT count(*) n FROM invoice_revisions').get().n, 1);
   assert.equal(workbookRows(exportInvoices(db, detail.run.id).buffer)[1][3], '45333933363');
@@ -164,6 +168,10 @@ test('단일 상품주문의 두 내부 출고가 수취 정보·서로 다른 �
   const parcels = [parcel({ internalId: '000002', round: 2, trackingNumber: '45333933363' }), parcel({ round: 1 })];
   let detail = start(db, undefined, parcels);
   assert.equal(detail.items.length, 1);
+  assert.equal(detail.items[0].decision, 'hold');
+  const view = invoiceView(db, detail.run.id);
+  detail = applyInvoiceTrackingReview(db, detail.run.id, { expectedVersion: view.viewVersion,
+    choices: [{ key: view.trackingReview.groups[0].key, trackingNumber: tracking, mode: 'split' }] });
   assert.equal(detail.items[0].decision, 'include');
   assert.equal(detail.items[0].trackingNumber, tracking);
   assert.equal(detail.items[0].sourceRows.length, 2);

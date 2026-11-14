@@ -48,6 +48,7 @@
           <div class="card-heading"><div><h2 id="items-title">주문별 적용 송장 · 누락 확인</h2><p>① 네이버 파일에 있는 주문을 원본 날짜·작업별로 표시합니다. 합배송된 상품주문번호는 같은 행에 함께 표시합니다.</p></div></div>
           <div class="result-toolbar"><input id="search" type="search" placeholder="상품주문번호·수취인·송장번호 검색" aria-label="송장 매칭 결과 검색"><select id="item-filter" aria-label="처리 상태 필터"><option value="all">모든 항목</option><option value="attention">확인·보류</option><option value="include">송장 찾음</option><option value="registered">등록 확인 완료</option><option value="exclude">제외</option></select></div>
           <div class="match-legend" aria-label="확인 필요 사유"><span class="number-problem">번호 문제</span><span class="missing-source">대응 자료 없음</span><span class="needs-review">충돌·판단 필요</span></div>
+          <div id="tracking-review-controls" class="tracking-review-controls" hidden><strong id="tracking-review-count" role="status"></strong><button id="replace-tracking-button" type="button">이번 파일의 송장으로 교체</button></div>
           <div class="invoice-table-wrap"><table class="invoice-table"><thead><tr><th>수취인 · 상품주문</th><th>제품 · 원본 위치</th><th>적용 송장</th><th>처리 · 검토 사유</th><th>몰 등록 상태</th></tr></thead><tbody id="item-rows"></tbody></table><p id="items-empty" class="empty-note" hidden>표시할 주문이 없습니다.</p></div>
           <div class="result-footer"><span id="visible-count"></span><span id="last-check"></span></div>
           <div class="review-actions"><span id="dirty-note" role="status"></span><button id="save-button" type="button" disabled>검토 내용 저장</button></div>

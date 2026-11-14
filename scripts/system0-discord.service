@@ -1,0 +1,27 @@
+[Unit]
+Description=system0 Discord bot
+Wants=network-online.target system0.service
+After=network-online.target system0.service
+
+[Service]
+Type=simple
+User=system0
+Group=system0
+WorkingDirectory=/opt/system0
+Environment=NODE_ENV=production
+Environment=SYSTEM0_ENV_FILE=/dev/null
+Environment=DISCORD_ENV_FILE=/etc/system0-discord.env
+EnvironmentFile=/etc/system0-discord.env
+ExecStart=/opt/node24/bin/node /opt/system0/scripts/discord-bot.mjs
+Restart=always
+RestartSec=5
+TimeoutStopSec=30
+UMask=0077
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
