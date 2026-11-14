@@ -4,6 +4,8 @@ const workDate = (value = Date.now()) => new Date(new Date(value).getTime() + 9 
 const count = value => Number(value || 0).toLocaleString('ko-KR');
 let selectedDate = workDate(), calendarMonth = selectedDate.slice(0, 7), selectedBatchId = null;
 let calendarData = { days: [] }, boardData = null, busy = false;
+const calendarRequests = new Map();
+let calendarRequestVersion = 0;
 let mode = 'confirmed', previewData = null;
 const messages = { confirmed: { text: '', error: false }, new: { text: '', error: false } };
 const formatTime = value => new Date(value).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul',
@@ -198,9 +200,9 @@ async function loadBoard({ reloadCalendar = false } = {}) {
   try {
     const query = new URLSearchParams({ date: selectedDate });
     if (selectedBatchId !== null) query.set('batchId', selectedBatchId);
-    const [data, dates] = await Promise.all([api(`/api/shipping/board?${query}`),
-      reloadCalendar ? api(`/api/shipping/dates?month=${calendarMonth}`) : Promise.resolve(null)]);
-    if (dates) calendarData = dates;
+    const request = api(`/api/shipping/board?${query}`);
+    if (reloadCalendar) void loadCalendar(calendarMonth);
+    const data = await request;
     renderBoard(data); renderCalendar();
   } catch (error) {
     if (boardData) {
@@ -211,15 +213,34 @@ async function loadBoard({ reloadCalendar = false } = {}) {
 }
 function selectDay(date) { selectedDate = date; selectedBatchId = null; renderCalendar(); loadBoard(); }
 function selectBatch(id) { if (busy) return; selectedBatchId = id; loadBoard(); }
+async function loadCalendar(month) {
+  const version = ++calendarRequestVersion;
+  const request = calendarRequests.get(month) || api(`/api/shipping/dates?month=${month}`);
+  calendarRequests.set(month, request);
+  try {
+    const data = await request;
+    if (version !== calendarRequestVersion || month !== calendarMonth) return;
+    calendarData = data; renderCalendar();
+    if (messages.confirmed.text.startsWith('달력 갱신 실패')) {
+      messages.confirmed = { text: '', error: false };
+      if (mode === 'confirmed') message('');
+    }
+  } catch {
+    if (version !== calendarRequestVersion || month !== calendarMonth) return;
+    const text = '달력 갱신 실패. 새로고침해 주세요.';
+    messages.confirmed = { text, error: true };
+    if (mode === 'confirmed') message(text, true);
+  } finally {
+    if (calendarRequests.get(month) === request) calendarRequests.delete(month);
+  }
+}
 async function changeMonth(direction) {
   if (busy) return;
   const [year, month] = calendarMonth.split('-').map(Number);
   const next = new Date(Date.UTC(year, month - 1 + direction, 1)).toISOString().slice(0, 7);
   if (next.startsWith('0000') || next.length !== 7) return;
-  setBusy(true);
-  try { const data = await api(`/api/shipping/dates?month=${next}`); calendarMonth = next; calendarData = data; renderCalendar(); message(''); }
-  catch (error) { message(error.message, true); }
-  finally { setBusy(false); }
+  calendarMonth = next; calendarData = { days: [] }; renderCalendar();
+  await loadCalendar(next);
 }
 $('previous-month').addEventListener('click', () => changeMonth(-1));
 $('next-month').addEventListener('click', () => changeMonth(1));
