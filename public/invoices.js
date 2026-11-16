@@ -355,7 +355,8 @@ function shipmentHistory(items) {
 function saveTrackingDraft(group, fields) {
   const next = { trackingNumber: group.selectedTrackingNumber || '', mode: group.mode || '', ...trackingChanges.get(group.key), ...fields };
   if (next.mode === 'replace' && !group.candidates.some(candidate => candidate.trackingNumber === next.trackingNumber && candidate.currentFile)
-    || next.mode === 'split' && group.splitEligible === false) next.mode = '';
+    || next.mode === 'split' && group.splitEligible === false
+    || next.mode === 'assign' && (group.kind !== 'assignment' || group.assignEligible === false)) next.mode = '';
   if (next.trackingNumber === (group.selectedTrackingNumber || '') && next.mode === (group.mode || '')) trackingChanges.delete(group.key);
   else trackingChanges.set(group.key, { key: group.key, ...next });
   renderItems(); refreshControls();
@@ -372,10 +373,11 @@ function trackingChoices(order, linked) {
     return container;
   }
   for (const group of groups) {
-    if (!group.needsSelection && !(group.mode === 'split' && group.splitEligible)) {
+    const assignment = group.kind === 'assignment';
+    if (!group.needsSelection && !(group.mode === 'split' && group.splitEligible) && !(assignment && group.assignEligible)) {
       const selected = group.selectedTrackingNumber || linked.find(item => group.itemIds.includes(item.id))?.trackingNumber || order.trackingNumbers[0] || '';
       container.append(element('strong', selected));
-      if (group.mode) container.append(element('small', group.mode === 'replace' ? '교체 적용' : '분할 상자 · 대표 송장'));
+      if (group.mode) container.append(element('small', group.mode === 'assign' ? '분리 배송' : group.mode === 'replace' ? '교체 적용' : '분할 상자 · 대표 송장'));
       continue;
     }
     const draft = { trackingNumber: group.selectedTrackingNumber || '', mode: group.mode || '', ...trackingChanges.get(group.key) };
@@ -389,7 +391,16 @@ function trackingChoices(order, linked) {
       number.add(option);
     }
     number.value = draft.trackingNumber;
-    number.addEventListener('change', () => saveTrackingDraft(group, { trackingNumber: number.value }));
+    number.disabled = assignment && group.assignEligible === false;
+    number.addEventListener('change', () => saveTrackingDraft(group, { trackingNumber: number.value,
+      ...(assignment ? { mode: number.value ? 'assign' : '' } : {}) }));
+    numberLabel.append(number); controls.append(numberLabel);
+    if (assignment) {
+      controls.append(element('small', '분리 배송'));
+      if (group.reason && group.needsSelection) controls.append(element('small', group.reason, 'match-reason'));
+      container.append(controls);
+      continue;
+    }
     const modeLabel = element('label', '송장 처리'), mode = element('select');
     mode.setAttribute('aria-label', `${order.recipient || group.internalId} 송장 처리`);
     mode.add(new Option('교체·분할 선택', ''));
@@ -399,7 +410,7 @@ function trackingChoices(order, linked) {
     mode.add(replace); mode.add(split);
     mode.value = draft.mode;
     mode.addEventListener('change', () => saveTrackingDraft(group, { mode: mode.value }));
-    numberLabel.append(number); modeLabel.append(mode); controls.append(numberLabel, modeLabel);
+    modeLabel.append(mode); controls.append(modeLabel);
     if (group.reason && group.needsSelection) controls.append(element('small', group.reason, 'match-reason'));
     container.append(controls);
   }
@@ -431,7 +442,7 @@ function renderItems() {
     for (const item of linked) recipient.append(element('small', item.productOrderId));
     const location = [order.source?.sourceFile, [order.source?.sourceSheet, order.source?.sourceRow !== undefined ? `${order.source.sourceRow}행` : ''].filter(Boolean).join(' ')].filter(Boolean).join(' · ');
     const product = element('td'); product.append(element('strong', order.cleanedName || order.originalName || '상품명 미정리'));
-    if (order.sourceType === 'naver_only' && order.optionName) product.append(element('small', `선택 옵션: ${order.optionName}`));
+    if (order.sourceType === 'naver_only' && order.optionName && order.optionName !== order.cleanedName) product.append(element('small', `선택 옵션: ${order.optionName}`));
     product.append(element('small', `${order.sourceType === 'naver_only' ? '① ' : '② '}${location}`, 'source-location'));
     const details = element('details'); details.append(element('summary', '주문 연결 근거'), element('p', [...new Set(linked.map(sourceDescription))].filter(Boolean).join('\n') || (order.internalId ? `내부 출고번호: ${order.internalId}` : order.reason || '연결된 자료가 없습니다.'))); product.append(details);
     if (readonly && order.originalOrder) {
@@ -598,7 +609,7 @@ async function saveReview() {
   const resolutions = [...issueChanges.values()];
   if (resolutions.some(issue => !issue.resolved && issue.note.trim())) { message('메모를 입력한 경고의 확인란도 선택해 주세요.', true); return; }
   const choices = [...trackingChanges.values()];
-  if (choices.some(choice => !choice.trackingNumber || !['replace', 'split'].includes(choice.mode))) {
+  if (choices.some(choice => !choice.trackingNumber || !['replace', 'split', 'assign'].includes(choice.mode))) {
     message('적용 송장과 교체·분할 상자 처리 방식을 모두 선택해 주세요.', true); return;
   }
   const body = { changes: [...itemChanges.values()], issueResolutions: resolutions.filter(issue => issue.resolved).map(({ key, note }) => ({ key, note })) };

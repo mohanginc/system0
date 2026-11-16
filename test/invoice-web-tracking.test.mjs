@@ -145,3 +145,55 @@ test('저장한 분할 대표 송장을 같은 화면에서 정정하고 무효 
   await h.run('saveReview()');
   assert.deepEqual(h.calls[0].body.choices, [{ key: 'shipment-1', trackingNumber: '001234567002', mode: 'split' }]);
 });
+
+const assignmentGroups = () => [1, 2].map(id => reviewGroup({ key: `product-${id}`, kind: 'assignment', assignEligible: true,
+  itemIds: [id], productOrderIds: [`mock-product-${id}`], replacementEligible: false, replaceEligible: false, splitEligible: false,
+  candidates: [{ internalId: 'shipment-13cm', trackingNumber: '001234567001', valid: true },
+    { internalId: 'shipment-15cm', trackingNumber: '001234567002', valid: true }] }));
+const descendants = node => [node, ...node.children.flatMap(descendants)];
+
+test('같은 네이버 주문의 분리 배송은 상품주문마다 다른 송장을 선택하고 함께 저장한다', async () => {
+  const h = harness(detail({ trackingReview: { groups: assignmentGroups(), pendingCount: 2 } }));
+  for (const [index, trackingNumber] of ['001234567001', '001234567002'].entries()) {
+    const controls = h.run(`trackingChoices({recipient:'모의 수취인',trackingNumbers:[]},[current.items[${index}]])`);
+    const selects = descendants(controls).filter(node => node.tagName === 'select');
+    assert.equal(selects.length, 1, '개별 출고 연결에는 교체·분할 방식을 다시 묻지 않습니다.');
+    selects[0].value = trackingNumber; selects[0].listeners.get('change')();
+  }
+  assert.equal(h.run("trackingChanges.get('product-1').trackingNumber"), '001234567001');
+  assert.equal(h.run("trackingChanges.get('product-2').trackingNumber"), '001234567002');
+  await h.run('saveReview()');
+  assert.deepEqual(h.calls, [{ url: '/api/invoices/8/tracking', body: { expectedVersion: 'version-1', choices: [
+    { key: 'product-1', trackingNumber: '001234567001', mode: 'assign' },
+    { key: 'product-2', trackingNumber: '001234567002', mode: 'assign' },
+  ] } }]);
+});
+
+test('안전하게 연결할 수 없는 분리 배송은 선택을 막는다', () => {
+  const group = assignmentGroups()[0]; group.assignEligible = false;
+  const h = harness(detail({ trackingReview: { groups: [group], pendingCount: 1 } }));
+  const controls = h.run("trackingChoices({recipient:'모의 수취인',trackingNumbers:[]},[current.items[0]])");
+  const selects = descendants(controls).filter(node => node.tagName === 'select');
+  assert.equal(selects.length, 1); assert.equal(selects[0].disabled, true);
+});
+
+test('저장한 분리 배송 송장은 정정할 수 있고 선택을 비우면 처리 방식도 해제한다', () => {
+  const group = assignmentGroups()[0]; Object.assign(group, { selectedTrackingNumber: '001234567001', mode: 'assign', needsSelection: false });
+  const h = harness(detail({ trackingReview: { groups: [group], pendingCount: 0 } }));
+  const controls = h.run("trackingChoices({recipient:'모의 수취인',trackingNumbers:['001234567001']},[current.items[0]])");
+  const selects = descendants(controls).filter(node => node.tagName === 'select');
+  assert.equal(selects.length, 1); assert.equal(selects[0].value, '001234567001');
+  selects[0].value = ''; selects[0].listeners.get('change')();
+  assert.equal(h.run("trackingChanges.get('product-1').mode"), '');
+});
+
+test('하나의 내부 출고를 재출력한 경우는 두 상품행의 선택을 계속 연동한다', () => {
+  const h = harness();
+  const first = h.run("trackingChoices({recipient:'모의 수취인',trackingNumbers:[]},[current.items[0]])");
+  const selects = descendants(first).filter(node => node.tagName === 'select');
+  assert.equal(selects.length, 2);
+  selects[0].value = '001234567002'; selects[0].listeners.get('change')();
+  const second = h.run("trackingChoices({recipient:'모의 수취인',trackingNumbers:[]},[current.items[1]])");
+  assert.equal(descendants(second).find(node => node.tagName === 'select').value, '001234567002');
+  assert.equal(h.run('trackingChanges.size'), 1);
+});

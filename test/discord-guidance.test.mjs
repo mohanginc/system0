@@ -41,6 +41,8 @@ test('교체 요청은 실제 업무 지침을 읽고 지원 action과 진행 �
   const guide = readFileSync(new URL('../prompts/discord-workflows.md', import.meta.url), 'utf8');
   assert.ok(sent.instructions.includes(guide.trim()));
   for (const term of ['분할', '대표', '보관', 'SKU', '등록 상태', '교체']) assert.ok(guide.includes(term), term);
+  assert.match(guide, /같은 내부 출고를 재출력한 경우.*선택은 연동/);
+  assert.match(guide, /내부 출고가 다른 분리 배송은 상품주문번호·옵션별로 송장을 독립 선택/);
   assert.equal(sent.store, false);
   const schema = sent.text.format.schema;
   assert.ok(schema.properties.action.enum.includes('replace_invoice'));

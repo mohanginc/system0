@@ -187,3 +187,85 @@ test('봇 요청부터 실제 업무 HTTP API·엑셀 생성·저장본 재다�
   assert.equal(app.locals.db.prepare('SELECT count(*) AS n FROM invoice_runs').get().n, 1);
   assert.equal(app.locals.db.prepare("SELECT count(*) AS n FROM discord_requests WHERE status = 'succeeded'").get().n, 2);
 });
+
+function assignmentServer() {
+  const calls = [], groups = [1, 2].map(id => ({ key: `product-${id}`, kind: 'assignment', assignEligible: true,
+    itemIds: [id], productOrderIds: [`20261114000000000${id}`], orderId: '202611140000000099', recipient: '검증 수취인',
+    productName: '검증 쿠션', optionName: id === 1 ? '높이 13cm' : '높이 15cm', needsSelection: true, mode: null,
+    candidates: [{ internalId: 'shipment-13cm', trackingNumber: '45500000001', valid: true },
+      { internalId: 'shipment-15cm', trackingNumber: '45500000002', valid: true },
+      { internalId: 'old-shipment', trackingNumber: '45500000000', valid: true, selectable: false }] }));
+  let revision = 1;
+  const view = () => ({ ...detail, viewVersion: String(revision).repeat(64),
+    fileActions: { create: !groups.some(group => group.needsSelection), reviewRequired: groups.some(group => group.needsSelection) },
+    trackingReview: { groups, pendingCount: groups.filter(group => group.needsSelection).length, replacementCount: 0 } });
+  const fetcher = async (url, options = {}) => {
+    const route = String(url).replace(config.baseUrl, ''), body = options.body ? JSON.parse(options.body) : null;
+    calls.push({ route, body });
+    if (route.startsWith('/api/discord/context?')) return response({ runId: 7, date: event.date });
+    if (route === '/api/discord/requests') return response({ request: { ...body, status: 'running' } });
+    if (route.startsWith('/api/discord/requests/')) return response({ request: { ...body } });
+    if (route === '/api/invoices/7') return response(view());
+    if (route === '/api/invoices/7/tracking') {
+      assert.equal(body.expectedVersion, view().viewVersion);
+      for (const choice of body.choices) Object.assign(groups.find(group => group.key === choice.key),
+        { selectedTrackingNumber: choice.trackingNumber, mode: choice.mode, needsSelection: false });
+      revision++; return response(view());
+    }
+    throw new Error('Unexpected assignment route: ' + route);
+  };
+  return { calls, groups, fetcher, advance() { revision++; } };
+}
+const discordComponents = output => (output.components || []).flatMap(row => row.components || []);
+
+test('분리 배송은 상품주문번호와 옵션을 구분해 각 송장을 독립 선택한다', async () => {
+  const mock = assignmentServer(), handle = createDiscordHandler({ config, fetcher: mock.fetcher });
+  const first = await handle({ ...scope, id: '800000000000000001', action: 'show_status', date: event.date });
+  const menus = discordComponents(first).filter(component => component.type === 3);
+  assert.equal(menus.length, 2);
+  for (const [index, menu] of menus.entries()) {
+    assert.match(menu.placeholder, new RegExp(mock.groups[index].productOrderIds[0]));
+    assert.match(menu.placeholder, index === 0 ? /13cm/ : /15cm/);
+    assert.deepEqual(menu.options.map(option => option.value), ['assign:45500000001', 'assign:45500000002']);
+  }
+  await handle({ ...scope, id: '800000000000000002', buttonId: menus[0].custom_id, values: ['assign:45500000001'] });
+  const latest = await handle({ ...scope, id: '800000000000000003', action: 'show_status', date: event.date });
+  const second = discordComponents(latest).find(component => component.type === 3 && /15cm/.test(component.placeholder));
+  await handle({ ...scope, id: '800000000000000004', buttonId: second.custom_id, values: ['assign:45500000002'] });
+  assert.deepEqual(mock.calls.filter(call => call.route.endsWith('/tracking')).map(call => call.body.choices), [
+    [{ key: 'product-1', trackingNumber: '45500000001', mode: 'assign' }],
+    [{ key: 'product-2', trackingNumber: '45500000002', mode: 'assign' }],
+  ]);
+  assert.equal(mock.groups[0].selectedTrackingNumber, '45500000001');
+  assert.equal(mock.groups[1].selectedTrackingNumber, '45500000002');
+  const complete = await handle({ ...scope, id: '800000000000000008', action: 'show_status', date: event.date });
+  assert.ok(discordComponents(complete).some(component => component.label === '송장 선택 수정'));
+});
+
+test('분리 배송도 변경된 버전과 다른 직원의 선택 버튼을 거부하고 연결 불가 후보는 숨긴다', async () => {
+  const mock = assignmentServer(); mock.groups[1].assignEligible = false;
+  const otherUser = '777777777777777777';
+  const handle = createDiscordHandler({ config: { ...config, userIds: [...config.userIds, otherUser] }, fetcher: mock.fetcher });
+  const first = await handle({ ...scope, id: '800000000000000005', action: 'show_status', date: event.date });
+  const menus = discordComponents(first).filter(component => component.type === 3);
+  assert.equal(menus.length, 1);
+  const wrongUser = await handle({ ...scope, userId: otherUser, id: '800000000000000006', buttonId: menus[0].custom_id, values: ['assign:45500000001'] });
+  assert.match(wrongUser.content, /계정.*채널/);
+  mock.advance();
+  const stale = await handle({ ...scope, id: '800000000000000007', buttonId: menus[0].custom_id, values: ['assign:45500000001'] });
+  assert.match(stale.content, /바뀌|최신/);
+  assert.equal(mock.calls.filter(call => call.route.endsWith('/tracking')).length, 0);
+});
+
+test('분리 배송 선택이 여러 건이면 저장한 항목보다 남은 상품주문을 먼저 보여준다', async () => {
+  const mock = assignmentServer();
+  mock.groups.push({ ...mock.groups[1], key: 'product-3', productOrderIds: ['202611140000000003'], itemIds: [3], optionName: '높이 17cm' });
+  const handle = createDiscordHandler({ config, fetcher: mock.fetcher });
+  const first = await handle({ ...scope, id: '800000000000000009', action: 'show_status', date: event.date });
+  const menu = discordComponents(first).find(component => component.type === 3);
+  const next = await handle({ ...scope, id: '800000000000000010', buttonId: menu.custom_id, values: ['assign:45500000001'] });
+  const menus = discordComponents(next).filter(component => component.type === 3);
+  assert.equal(menus.length, 2);
+  assert.ok(menus.some(component => /17cm/.test(component.placeholder)), '미선택 상품주문을 숨기지 않습니다.');
+  assert.ok(menus.every(component => !/202611140000000001/.test(component.placeholder)));
+});
