@@ -321,6 +321,13 @@ function matchLabel(state) {
     invalid_id: '연결 번호 확인 필요', missing_courier: '대응 송장 없음', missing_naver: '네이버 자료 없음', outside_scope: '선택한 작업에 없음',
     missing_saved_order: '확인한 주문 자료 없음', unsupported_mall: '미지원 몰 확인 필요', source_deleted: '원본 자료 없음', not_matched: '송장 매칭 전', not_targeted: '최근 네이버 파일의 대상 아님', conflict: '충돌·판단 필요' }[state] || '확인 필요';
 }
+function appendRegistrationComparison(target, appliedTrackingNumber, remote) {
+  if (!remote) return;
+  target.append(element('small', `system0: ${appliedTrackingNumber || '미선택'}`), element('small', `네이버: ${remote.trackingNumber || '미등록'}`));
+  if (remote.fresh && typeof remote.matches === 'boolean') target.append(element('small', remote.matches ? '송장 일치'
+    : remote.trackingNumber && remote.trackingNumber === appliedTrackingNumber ? '택배사 다름' : '송장 다름'));
+  if (!remote.fresh || remote.checkedAt) target.append(element('small', `${remote.fresh ? '조회' : '이전 조회'}${remote.checkedAt ? ' ' + formatTime(remote.checkedAt) : ''}`));
+}
 function reviewControls(original) {
   const item = draftItem(original), group = element('div', undefined, 'item-review');
   const decision = element('select', undefined, 'item-decision'); decision.dataset.itemId = String(item.id); decision.setAttribute('aria-label', `${item.productOrderId} 처리 방법`);
@@ -485,12 +492,18 @@ function renderItems() {
       const state = order.latestStatus?.registrationState || 'unchecked', complete = ['complete','external_registered'].includes(order.state);
       const label = ['canceled','returned'].includes(order.state) ? matchLabel(order.state) : complete ? '등록 확인 완료' : registrationLabels[state] || matchLabel(order.state);
       registration.append(element('span', label, `registration-badge ${complete ? 'registered' : state}`));
-      if (order.latestStatus?.checkedAt) registration.append(element('small', `조회 ${formatTime(order.latestStatus.checkedAt)}`));
+      const products = (order.latestStatus?.products || []).filter(product => product.naverRegistration);
+      if (!products.length && order.latestStatus?.checkedAt) registration.append(element('small', `조회 ${formatTime(order.latestStatus.checkedAt)}`));
+      for (const product of products) {
+        if (products.length > 1) registration.append(element('small', product.productOrderId));
+        appendRegistrationComparison(registration, product.appliedTrackingNumber, product.naverRegistration);
+      }
     } else {
     for (const item of linked) {
       const state = item.registrationState || 'unchecked';
       if (linked.length > 1) registration.append(element('small', item.productOrderId));
       registration.append(element('span', registrationLabels[state] || '확인 필요', `registration-badge ${state === 'complete' ? 'registered' : state}`));
+      appendRegistrationComparison(registration, item.trackingNumber, item.naverRegistration);
       if (item.registrationNote) registration.append(element('small', item.registrationNote));
       if (item.sourceRegistered && state !== 'complete') registration.append(element('small', '원본에 동일 송장 있음 · 중복 다운로드 제외'));
     }

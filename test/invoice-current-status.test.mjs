@@ -80,7 +80,7 @@ test('토요일 선택으로 월요일 오전·오후를 함께 조회하고 과
   assert.equal(formerlyMissing.latestStatus.runId, h.pm.run.id); assert.equal(formerlyMissing.latestStatus.readonly, true);
   assert.equal(formerlyMissing.latestStatus.processingDate, '2026-11-09');
   const rawAfter = invoiceDetail(h.db, h.am.run.id);
-  assert.deepEqual(rawAfter.items.map(({ registrationState, checkedAt, statusFresh, registrationProblems, registrationNote, ...row }) => row), rawBefore.items.map(({ registrationState, checkedAt, statusFresh, registrationProblems, registrationNote, ...row }) => row));
+  assert.deepEqual(rawAfter.items.map(({ registrationState, checkedAt, statusFresh, registrationProblems, registrationNote, naverRegistration, ...row }) => row), rawBefore.items.map(({ registrationState, checkedAt, statusFresh, registrationProblems, registrationNote, naverRegistration, ...row }) => row));
   assert.deepEqual(rawAfter.orders.filter(row => row.productOrderId), rawBefore.orders.filter(row => row.productOrderId));
   assert.deepEqual(h.business(), stored);
   const saved = await h.request(`/api/invoices/${h.am.run.id}/download`); assert.deepEqual(Buffer.from(await saved.arrayBuffer()), h.bytes);

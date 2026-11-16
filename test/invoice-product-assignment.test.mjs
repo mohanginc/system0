@@ -256,6 +256,7 @@ test('각 상품의 실제 등록 송장을 조회하고 토요일 화면에도 
   const queried = [], byId = new Map([high, superHigh].map(order => [order.productOrderId, order]));
   const naver = { queryProductOrders: async ids => { queried.push([...ids]); return ids.map(id => registeredOrder(byId.get(id))); } };
   const s = await setup(t, { naver }), initial = await s.start();
+  assert.ok(initial.items.every(item => item.naverRegistration === null));
   const assigned = await s.select(initial, [choiceFor(initial, high), choiceFor(initial, superHigh)]);
   const sourceView = async () => {
     const response = await fetch(s.base + '/api/invoices/orders?batchIds=' + encodeURIComponent(JSON.stringify([s.batch.batch.id])));
@@ -271,6 +272,14 @@ test('각 상품의 실제 등록 송장을 조회하고 토요일 화면에도 
       assert.deepEqual(projected.trackingNumbers, [product.trackingNumber]);
       assert.equal(projected.latestStatus.processingDate, date);
       assert.equal(projected.latestStatus.readonly, true);
+      const details = projected.latestStatus.products;
+      assert.equal(details.length, 1);
+      assert.equal(details[0].appliedTrackingNumber, product.trackingNumber);
+      assert.equal(details[0].naverRegistration?.matches ?? null, state === 'complete' ? true : null);
+      if (state === 'complete') {
+        assert.equal(details[0].naverRegistration.trackingNumber, product.trackingNumber);
+        assert.equal(details[0].naverRegistration.fresh, true);
+      }
     }
   };
   assertProjection(await sourceView(), 'ready');
@@ -282,9 +291,84 @@ test('각 상품의 실제 등록 송장을 조회하고 토요일 화면에도 
     assert.equal(itemFor(checked, product).statusFresh, true);
     assert.equal(itemFor(checked, product).trackingNumber, product.trackingNumber);
     assert.deepEqual(itemFor(checked, product).registrationProblems, []);
+    assert.deepEqual(itemFor(checked, product).naverRegistration, { trackingNumber: product.trackingNumber, carrierCode: 'KGB',
+      status: 'DELIVERING', checkedAt: itemFor(checked, product).checkedAt, fresh: true, matches: true });
+    assert.ok(Number.isFinite(Date.parse(itemFor(checked, product).naverRegistration.checkedAt)));
   }
   assertProjection(await sourceView(), 'complete');
   s.assertSourceUntouched();
+});
+
+test('system0에서 반대로 선택한 두 송장을 네이버 조회와 비교하고 충돌 원문과 직원 선택을 보존한다', async t => {
+  const byId = new Map([high, superHigh].map(order => [order.productOrderId, order]));
+  const s = await setup(t, { naver: { queryProductOrders: async ids => ids.map(id => registeredOrder(byId.get(id))) } });
+  const initial = await s.start(), applied = new Map([[high.productOrderId, superHigh.trackingNumber], [superHigh.productOrderId, high.trackingNumber]]);
+  const wrong = await s.select(initial, [
+    { ...choiceFor(initial, high), trackingNumber: superHigh.trackingNumber },
+    { ...choiceFor(initial, superHigh), trackingNumber: high.trackingNumber },
+  ]);
+  const response = await fetch(s.base + `/api/invoices/${wrong.run.id}/check`, { method: 'POST' });
+  const checked = await response.json(); assert.equal(response.status, 200, JSON.stringify(checked));
+  for (const product of [high, superHigh]) {
+    const item = itemFor(checked, product);
+    assert.equal(item.trackingNumber, applied.get(product.productOrderId), '조회는 직원이 선택한 적용 송장을 바꾸면 안 됩니다.');
+    assert.equal(item.registrationState, 'conflict');
+    assert.ok(item.registrationProblems.includes('tracking_conflict'));
+    assert.deepEqual(item.naverRegistration, { trackingNumber: product.trackingNumber, carrierCode: 'KGB', status: 'DELIVERING',
+      checkedAt: item.checkedAt, fresh: true, matches: false });
+  }
+  const sourceResponse = await fetch(s.base + '/api/invoices/orders?batchIds=' + encodeURIComponent(JSON.stringify([s.batch.batch.id])));
+  const source = await sourceResponse.json(); assert.equal(sourceResponse.status, 200, JSON.stringify(source));
+  const products = source.currentOrders.flatMap(order => order.latestStatus.products);
+  assert.equal(products.length, 2);
+  for (const product of [high, superHigh]) {
+    const projected = products.find(row => row.productOrderId === product.productOrderId);
+    assert.equal(projected.appliedTrackingNumber, applied.get(product.productOrderId));
+    assert.deepEqual(projected.naverRegistration, itemFor(checked, product).naverRegistration);
+  }
+  s.assertSourceUntouched();
+});
+
+test('미등록 응답은 일치로 표시하지 않고 조회 실패·근거 변경 뒤의 과거 네이버 송장은 최신으로 표시하지 않는다', async t => {
+  const byId = new Map([high, superHigh].map(order => [order.productOrderId, order]));
+  let mode = 'pending';
+  const s = await setup(t, { naver: { queryProductOrders: async ids => {
+    if (mode === 'failure') throw new Error('검증용 조회 실패');
+    return ids.map(id => registeredOrder(byId.get(id), mode === 'pending'
+      ? { status: 'PAYED', deliveryStatus: '', trackingNumber: '', deliveryCompanyCode: '' } : {}));
+  } } });
+  const initial = await s.start(), assigned = await s.select(initial, [choiceFor(initial, high), choiceFor(initial, superHigh)]);
+  const check = () => fetch(s.base + `/api/invoices/${assigned.run.id}/check`, { method: 'POST' });
+  const pendingResponse = await check(), pending = await pendingResponse.json(); assert.equal(pendingResponse.status, 200, JSON.stringify(pending));
+  for (const item of pending.items) {
+    assert.equal(item.registrationState, 'pending');
+    assert.deepEqual(item.naverRegistration, { trackingNumber: '', carrierCode: '', status: 'PAYED', checkedAt: item.checkedAt, fresh: true, matches: null });
+  }
+  mode = 'registered';
+  const registeredResponse = await check(), registered = await registeredResponse.json(); assert.equal(registeredResponse.status, 200, JSON.stringify(registered));
+  mode = 'failure';
+  const failed = await check(); assert.equal(failed.status, 400, await failed.text());
+  const afterFailure = await s.view(assigned.run.id);
+  for (const product of [high, superHigh]) {
+    const before = itemFor(registered, product).naverRegistration;
+    assert.deepEqual(itemFor(afterFailure, product).naverRegistration, { ...before, fresh: false, matches: null });
+    assert.equal(itemFor(afterFailure, product).trackingNumber, product.trackingNumber);
+  }
+  const sourceResponse = await fetch(s.base + '/api/invoices/orders?batchIds=' + encodeURIComponent(JSON.stringify([s.batch.batch.id])));
+  const source = await sourceResponse.json(); assert.equal(sourceResponse.status, 200, JSON.stringify(source));
+  for (const product of source.currentOrders.flatMap(order => order.latestStatus.products)) {
+    assert.equal(product.naverRegistration.fresh, false); assert.equal(product.naverRegistration.matches, null);
+  }
+  s.assertSourceUntouched();
+  mode = 'registered';
+  const refreshed = await check(); assert.equal(refreshed.status, 200, await refreshed.text());
+  const valid = await s.view(assigned.run.id);
+  const change = await fetch(s.base + `/api/batches/${s.batch.batch.id}/rows`, { ...jsonOptions({ changes: [{ id: s.batch.rows[0].id,
+    cleanedName: high.productName + ' 근거 수정', status: 'confirmed', reviewNote: '' }] }), method: 'PATCH' });
+  assert.equal(change.status, 200, await change.text());
+  const invalid = await s.view(assigned.run.id);
+  assert.equal(itemFor(invalid, high).assignmentValid, false);
+  assert.deepEqual(itemFor(invalid, high).naverRegistration, { ...itemFor(valid, high).naverRegistration, fresh: false, matches: null });
 });
 
 test('상품별 송장과 원본 연결은 서버를 재시작해도 보존된다', async t => {

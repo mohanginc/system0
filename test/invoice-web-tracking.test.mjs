@@ -241,3 +241,44 @@ test('원본 작업이 없는 네이버 단독행은 기존 네이버 파일 그
   const heading = h.run('groupHeading(orderGroups(displayedOrders())[0], 5)');
   assert.ok(descendants(heading).some(node => node.textContent === '① 네이버 주문파일'));
 });
+
+function registrationView(item, changes = {}) {
+  const order = { key: 'product-1', rowId: null, batchId: 14, sourceType: 'saved_product', itemIds: [item.id],
+    cleanedName: '검증 쿠션', trackingNumbers: [item.trackingNumber], state: 'ready', issues: [], source: {}, ...changes };
+  const h = harness(detail({ items: [item], orders: [order], trackingReview: { groups: [], pendingCount: 0 } }));
+  h.run("renderOutsideTarget = () => {}; renderUnmatched = () => {}; $('item-filter').value = 'all'; renderItemsForTest();");
+  const row = descendants(h.nodes.get('item-rows')).find(node => node.tagName === 'tr' && node.children[0]?.tagName === 'td');
+  return descendants(row.children[4]).map(node => node.textContent || '').filter(Boolean);
+}
+
+test('등록 상태에서 system0 적용 번호와 네이버 조회 번호를 비교하고 미조회·이전 조회를 구분한다', () => {
+  const item = { id: 1, productOrderId: 'mock-product-1', trackingNumber: '45500000001', decision: 'include',
+    registrationState: 'unchecked', issues: [], blockingIssueKeys: [] };
+  const remote = { trackingNumber: '45500000002', carrierCode: 'KGB', status: 'DELIVERING', checkedAt: '2026-11-16T03:24:00Z', fresh: true, matches: false };
+  const mismatch = registrationView({ ...item, naverRegistration: remote });
+  assert.ok(mismatch.includes('system0: 45500000001')); assert.ok(mismatch.includes('네이버: 45500000002'));
+  assert.ok(mismatch.includes('송장 다름'));
+  const same = registrationView({ ...item, naverRegistration: { ...remote, trackingNumber: item.trackingNumber, matches: true } });
+  assert.ok(same.includes('송장 일치')); assert.ok(!same.includes('송장 다름'));
+  const wrongCarrier = registrationView({ ...item, naverRegistration: { ...remote, trackingNumber: item.trackingNumber, carrierCode: 'OTHER' } });
+  assert.ok(wrongCarrier.includes('택배사 다름')); assert.ok(!wrongCarrier.includes('송장 다름'));
+  const unchecked = registrationView({ ...item, naverRegistration: null });
+  assert.deepEqual(unchecked, ['등록 미조회']);
+  const stale = registrationView({ ...item, naverRegistration: { ...remote, fresh: false, matches: null } });
+  assert.ok(stale.some(value => value.startsWith('이전 조회')));
+  assert.ok(stale.includes('네이버: 45500000002')); assert.ok(!stale.some(value => ['송장 일치', '송장 다름'].includes(value)));
+  const missing = registrationView({ ...item, naverRegistration: { ...remote, trackingNumber: '', matches: null } });
+  assert.ok(missing.includes('네이버: 미등록')); assert.ok(!missing.includes('송장 다름'));
+});
+
+test('이전 날짜의 조회 전용 행에서도 최신 상품주문별 적용 송장과 네이버 번호를 비교한다', () => {
+  const remote = { trackingNumber: '45500000004', carrierCode: 'KGB', status: 'DELIVERING', checkedAt: '2026-11-16T03:24:00Z', fresh: true, matches: false };
+  const text = registrationView({ id: 1, productOrderId: 'old-product', trackingNumber: '45500000000',
+    decision: 'include', issues: [], naverRegistration: null }, { latestStatus: { readonly: true, registrationState: 'conflict', products: [
+      { productOrderId: 'latest-product-1', appliedTrackingNumber: '45500000003', naverRegistration: remote },
+      { productOrderId: 'latest-product-2', appliedTrackingNumber: '45500000005', naverRegistration: { ...remote, trackingNumber: '45500000005', matches: true } },
+    ] } });
+  for (const value of ['latest-product-1', 'latest-product-2', 'system0: 45500000003', '네이버: 45500000004',
+    'system0: 45500000005', '네이버: 45500000005', '송장 다름', '송장 일치']) assert.ok(text.includes(value), value);
+  assert.ok(!text.includes('system0: 45500000000'), '과거 행에 남은 적용 번호를 최신 비교에 사용하지 않습니다.');
+});
