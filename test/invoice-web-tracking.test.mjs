@@ -28,14 +28,15 @@ function harness(initial = detail()) {
   const nodes = new Map(), calls = [], confirms = [];
   const getNode = id => { if (!nodes.has(id)) nodes.set(id, new Node()); return nodes.get(id); };
   const context = vm.createContext({ console, URL, URLSearchParams, AbortSignal, setTimeout, clearTimeout,
-    document: { getElementById: getNode, createElement: tag => new Node(tag), querySelectorAll: () => [] },
+    document: { getElementById: getNode, createElement: tag => new Node(tag), createDocumentFragment: () => new Node('fragment'), querySelectorAll: () => [] },
     window: { location: { search: '' }, addEventListener() {}, confirm: text => { confirms.push(text); return true; } },
     Option: class extends Node { constructor(text, value) { super('option'); this.textContent = text; this.value = value; } },
     fetch: () => new Promise(() => {}), fixture: initial,
     mockApi: async (url, options) => { calls.push({ url, body: JSON.parse(options.body) }); return initial; },
   });
   vm.runInContext(source, context);
-  vm.runInContext(`current = fixture; busy = false;
+  vm.runInContext(`const renderItemsForTest = renderItems, renderOutsideTargetForTest = renderOutsideTarget;
+    current = fixture; busy = false;
     api = (...args) => mockApi(...args);
     renderItems = () => {}; renderIssues = () => {}; loadHistory = async () => {};
     showRun = data => { current = data; itemChanges.clear(); issueChanges.clear(); trackingChanges.clear(); };`, context);
@@ -196,4 +197,47 @@ test('하나의 내부 출고를 재출력한 경우는 두 상품행의 선택�
   const second = h.run("trackingChoices({recipient:'모의 수취인',trackingNumbers:[]},[current.items[1]])");
   assert.equal(descendants(second).find(node => node.tagName === 'select').value, '001234567002');
   assert.equal(h.run('trackingChanges.size'), 1);
+});
+
+test('분리 배송 상품행은 원래 작업의 일반 주문과 함께 표시하고 송장은 독립 선택한다', () => {
+  const origin = { batchId: 14, batchCreatedAt: '2026-11-14T03:43:38Z', sourceFile: '토요일 주문.xls', sourceSheet: '주문' };
+  const orders = [{ key: 'saved-3', rowId: 3, batchId: 14, sourceType: 'saved', itemIds: [3],
+    cleanedName: '일반 쿠션', trackingNumbers: ['001234567003'], state: 'ready', issues: [], source: { ...origin, sourceRow: 21 } },
+  ...[1, 2].map(id => ({ key: `product-${id}`, rowId: null, batchId: 14, sourceType: 'saved_product', itemIds: [id],
+    recipient: '모의 수취인', cleanedName: '쿠션 High(13cm)', optionName: id === 1 ? '높이 13cm' : '높이 15cm',
+    trackingNumbers: [], state: 'hold', issues: [], source: { ...origin, sourceRow: 21 + id } }))];
+  const initial = detail({ orders, batches: [{ id: 14, name: origin.sourceFile, createdAt: origin.batchCreatedAt }],
+    trackingReview: { groups: assignmentGroups(), pendingCount: 2 } });
+  initial.items.forEach((item, index) => { item.sourceRows = [{ ...origin, rowId: 22 + index, sourceRow: 22 + index }]; });
+  initial.items.push({ id: 3, productOrderId: 'mock-product-3', decision: 'include', issues: [], blockingIssueKeys: [] });
+  const h = harness(initial);
+  h.run("renderOutsideTarget = () => {}; renderUnmatched = () => {}; $('item-filter').value = 'all'; renderItemsForTest();");
+  const rendered = descendants(h.nodes.get('item-rows'));
+  const headings = rendered.filter(node => node.className === 'order-group-header');
+  assert.equal(headings.length, 1, '네이버 파일 별도 그룹 대신 원래 작업 그룹에 함께 표시합니다.');
+  const headingText = descendants(headings[0]).map(node => node.textContent || '').join(' ');
+  assert.match(headingText, /작업 11\. 14\./); assert.match(headingText, /토요일 주문\.xls/);
+  assert.doesNotMatch(headingText, /네이버 주문파일/);
+  const optionTexts = rendered.map(node => node.textContent || '').filter(value => value.startsWith('선택 옵션:'));
+  assert.deepEqual(optionTexts, ['선택 옵션: 높이 13cm', '선택 옵션: 높이 15cm']);
+  const productRows = rendered.filter(node => node.tagName === 'tr' && node.children[0]?.tagName === 'td');
+  assert.equal(productRows.length, 3);
+  for (const [index, row] of productRows.slice(1).entries()) {
+    const select = descendants(row.children[2]).find(node => node.tagName === 'select');
+    assert.ok(select); select.value = `00123456700${index + 1}`; select.listeners.get('change')();
+  }
+  assert.equal(h.run("trackingChanges.get('product-1').trackingNumber"), '001234567001');
+  assert.equal(h.run("trackingChanges.get('product-2').trackingNumber"), '001234567002');
+  h.run(`previewOrders = current.items.flatMap(item => item.sourceRows || []).map(source => ({ rowId: source.rowId, source }));
+    renderOutsideTargetForTest();`);
+  assert.equal(h.nodes.get('outside-target-count').textContent, '0행', '주문표에 연결한 원본행은 파일 밖 주문으로 중복 표시하지 않습니다.');
+});
+
+test('원본 작업이 없는 네이버 단독행은 기존 네이버 파일 그룹을 유지한다', () => {
+  const h = harness(detail({ orders: [{ key: 'naver-only', sourceType: 'naver_only', batchId: null, itemIds: [1],
+    source: { sourceFile: '네이버.xlsx' }, trackingNumbers: [], optionName: '높이 15cm' }] }));
+  const groups = h.run('orderGroups(displayedOrders())');
+  assert.equal(groups.length, 1); assert.equal(groups[0].sourceType, 'naver_only');
+  const heading = h.run('groupHeading(orderGroups(displayedOrders())[0], 5)');
+  assert.ok(descendants(heading).some(node => node.textContent === '① 네이버 주문파일'));
 });

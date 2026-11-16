@@ -112,6 +112,11 @@ test('김은영 13·15cm는 상품주문별로 선택하고 부분 저장·재�
     const row = initial.currentOrders.find(order => order.itemIds.includes(itemFor(initial, product).id));
     assert.deepEqual(row.itemIds, [itemFor(initial, product).id]);
     assert.equal(row.cleanedName, product.optionName, '원문 공통 제목보다 실제 선택한 높이를 표시합니다.');
+    assert.equal(row.sourceType, 'saved_product');
+    assert.equal(row.batchId, s.batch.batch.id);
+    assert.equal(row.source.batchCreatedAt.slice(0, 10), '2026-11-14');
+    assert.equal(row.rowId, null, '표시할 작업 묶음 때문에 상품주문 선택을 원본행 단위로 합치지 않습니다.');
+    assert.equal(row.source.sourceRow, undefined, '선택 전에는 후보 원본 중 특정 행으로 연결됐다고 표시하지 않습니다.');
   }
   const beforeSibling = JSON.stringify(itemFor(initial, superHigh));
   const partial = await s.select(initial, [choiceFor(initial, high)]);
@@ -126,6 +131,14 @@ test('김은영 13·15cm는 상품주문별로 선택하고 부분 저장·재�
   assert.equal(complete.trackingReview.pendingCount, 0);
   assertAssigned(complete, high, s.batch.rows[0].id);
   assertAssigned(complete, superHigh, s.batch.rows[1].id);
+  assert.deepEqual(complete.currentOrders.map(row => row.source.sourceRow), [22, 23], '연결 후에는 원래 작업의 원본행 순서로 표시합니다.');
+  for (const product of [high, superHigh]) {
+    const row = complete.currentOrders.find(order => order.itemIds.includes(itemFor(complete, product).id));
+    assert.equal(row.sourceType, 'saved_product'); assert.equal(row.batchId, s.batch.batch.id);
+    assert.deepEqual(row.latestStatus.productOrderIds, [product.productOrderId]);
+    assert.deepEqual(row.trackingNumbers, [product.trackingNumber]);
+    assert.equal(row.source.rowId, itemFor(complete, product).sourceRows[0].rowId);
+  }
   assert.deepEqual(excelRows(await s.build(complete)), [['상품주문번호', '배송방법', '택배사', '송장번호'],
     ...[superHigh, high].map(order => [order.productOrderId, '택배,등기,소포', '로젠택배', order.trackingNumber])]);
   const persisted = await s.view(initial.run.id);

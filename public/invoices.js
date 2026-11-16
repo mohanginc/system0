@@ -442,7 +442,7 @@ function renderItems() {
     for (const item of linked) recipient.append(element('small', item.productOrderId));
     const location = [order.source?.sourceFile, [order.source?.sourceSheet, order.source?.sourceRow !== undefined ? `${order.source.sourceRow}행` : ''].filter(Boolean).join(' ')].filter(Boolean).join(' · ');
     const product = element('td'); product.append(element('strong', order.cleanedName || order.originalName || '상품명 미정리'));
-    if (order.sourceType === 'naver_only' && order.optionName && order.optionName !== order.cleanedName) product.append(element('small', `선택 옵션: ${order.optionName}`));
+    if (['naver_only', 'saved_product'].includes(order.sourceType) && order.optionName && order.optionName !== order.cleanedName) product.append(element('small', `선택 옵션: ${order.optionName}`));
     product.append(element('small', `${order.sourceType === 'naver_only' ? '① ' : '② '}${location}`, 'source-location'));
     const details = element('details'); details.append(element('summary', '주문 연결 근거'), element('p', [...new Set(linked.map(sourceDescription))].filter(Boolean).join('\n') || (order.internalId ? `내부 출고번호: ${order.internalId}` : order.reason || '연결된 자료가 없습니다.'))); product.append(details);
     if (readonly && order.originalOrder) {
@@ -505,7 +505,9 @@ function renderItems() {
   renderUnmatched();
 }
 function renderOutsideTarget() {
-  const relatedRows = new Set((current.orders || []).map(order => order.rowId));
+  const relatedRows = new Set((current.orders || []).flatMap(order => [order.rowId,
+    ...(order.sourceType === 'saved_product' ? current.items.filter(item => order.itemIds.includes(item.id))
+      .flatMap(item => (item.sourceRows || []).map(source => source.rowId)) : [])]));
   const orders = [...(current.currentOutsideOrders || current.outsideOrders || [])], represented = new Set([...relatedRows, ...orders.map(order => order.rowId)]);
   for (const order of previewOrders) if (!represented.has(order.rowId)) orders.push(order);
   const fragment = document.createDocumentFragment(), states = {};
