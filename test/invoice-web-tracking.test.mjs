@@ -188,6 +188,21 @@ test('저장한 분리 배송 송장은 정정할 수 있고 선택을 비우면
   assert.equal(h.run("trackingChanges.get('product-1').mode"), '');
 });
 
+test('네이버 등록 후에도 정정 가능한 분리 배송 송장을 웹에서 다시 선택해 저장한다', async () => {
+  for (const state of ['complete', 'conflict']) {
+    const group = assignmentGroups()[0]; Object.assign(group, { selectedTrackingNumber: '001234567001', mode: 'assign', needsSelection: false });
+    const initial = detail({ trackingReview: { groups: [group], pendingCount: 0 } });
+    initial.items[0].registrationState = state; initial.items[0].sourceRegistered = state === 'complete';
+    const h = harness(initial);
+    const controls = h.run("trackingChoices({recipient:'모의 수취인',trackingNumbers:['001234567001']},[current.items[0]])");
+    const select = descendants(controls).find(node => node.tagName === 'select');
+    assert.ok(select); assert.equal(select.disabled, false);
+    select.value = '001234567002'; select.listeners.get('change')();
+    await h.run('saveReview()');
+    assert.deepEqual(h.calls[0].body.choices, [{ key: group.key, trackingNumber: '001234567002', mode: 'assign' }]);
+  }
+});
+
 test('하나의 내부 출고를 재출력한 경우는 두 상품행의 선택을 계속 연동한다', () => {
   const h = harness();
   const first = h.run("trackingChoices({recipient:'모의 수취인',trackingNumbers:[]},[current.items[0]])");

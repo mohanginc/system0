@@ -107,6 +107,7 @@ test('김은영 13·15cm는 상품주문별로 선택하고 부분 저장·재�
       [high, superHigh].map(order => [order.internalId, order.trackingNumber]).sort());
   }
   assert.equal(initial.trackingReview.pendingCount, 2);
+  assert.ok(initial.items.every(item => !item.registrationRecheck));
   assert.equal(initial.currentOrders.length, 2);
   for (const product of [high, superHigh]) {
     const row = initial.currentOrders.find(order => order.itemIds.includes(itemFor(initial, product).id));
@@ -128,6 +129,7 @@ test('김은영 13·15cm는 상품주문별로 선택하고 부분 저장·재�
   const refreshed = await s.view(initial.run.id);
   assertAssigned(refreshed, high, s.batch.rows[0].id);
   const complete = await s.select(refreshed, [choiceFor(refreshed, superHigh)]);
+  assert.ok(complete.items.every(item => !item.registrationRecheck), '처음 미등록 송장 선택에 등록 재조회를 강제하지 않습니다.');
   assert.equal(complete.trackingReview.pendingCount, 0);
   assertAssigned(complete, high, s.batch.rows[0].id);
   assertAssigned(complete, superHigh, s.batch.rows[1].id);
@@ -228,7 +230,7 @@ test('선택 근거인 정리된 제품명이 바뀌면 과거 연결로 엑셀�
   assert.equal(JSON.stringify(s.db.prepare('SELECT * FROM invoice_items ORDER BY id').all()), before);
 });
 
-test('수취 정보가 다른 송장과 네이버에서 이미 발송된 상품은 상품별 연결 선택으로 우회하지 않는다', async t => {
+test('수취 정보가 다른 송장은 거절하고 네이버 등록 여부와 로컬 송장 정정을 구분한다', async t => {
   await t.test('수취 주소가 다른 송장', async t => {
     const s = await setup(t), initial = await s.start([{ ...high, address: '서울 다른로 99 202호' }, superHigh]);
     const group = groupFor(initial, high);
@@ -240,14 +242,25 @@ test('수취 정보가 다른 송장과 네이버에서 이미 발송된 상품�
     assert.equal(JSON.stringify(s.db.prepare('SELECT * FROM invoice_items ORDER BY id').all()), before);
     s.assertSourceUntouched();
   });
-  await t.test('이미 발송된 네이버 원본', async t => {
-    const s = await setup(t), products = naverProducts.map(order => ({ ...order, status: '배송중', sourceTrackingNumber: order.trackingNumber, carrier: '로젠택배' }));
+  await t.test('배송중 원본의 로컬 송장을 정정하고 최신 조회로 이전 원본의 송장 차이를 해소한다', async t => {
+    const byId = new Map([high, superHigh].map(order => [order.productOrderId, order]));
+    const s = await setup(t, { naver: { queryProductOrders: async ids => ids.map(id => registeredOrder(byId.get(id))) } });
+    const products = naverProducts.map(order => ({ ...order, status: '배송중', sourceTrackingNumber: superHigh.trackingNumber, carrier: '로젠택배' }));
     const initial = await s.start([high, superHigh], products);
-    const before = JSON.stringify(s.db.prepare('SELECT * FROM invoice_items ORDER BY id').all());
-    const response = await fetch(s.base + `/api/invoices/${initial.run.id}/tracking`, jsonOptions({ expectedVersion: initial.viewVersion,
-      choices: [choiceFor(initial, high)] }));
-    assert.equal(response.status, 400, await response.text());
-    assert.equal(JSON.stringify(s.db.prepare('SELECT * FROM invoice_items ORDER BY id').all()), before);
+    const assigned = await s.select(initial, [choiceFor(initial, high), choiceFor(initial, superHigh)]);
+    assert.ok(assigned.items.every(item => item.registrationRecheck && item.naverRegistration === null));
+    const blocked = await fetch(s.base + `/api/invoices/${assigned.run.id}/export`);
+    assert.equal(blocked.status, 400, await blocked.text());
+    const response = await fetch(s.base + `/api/invoices/${assigned.run.id}/check`, { method: 'POST' });
+    const checked = await response.json(); assert.equal(response.status, 200, JSON.stringify(checked));
+    for (const product of [high, superHigh]) {
+      const item = itemFor(checked, product);
+      assert.equal(item.trackingNumber, product.trackingNumber);
+      assert.equal(item.registrationState, 'complete');
+      assert.equal(item.naverRegistration.matches, true);
+      assert.deepEqual(item.blockingIssueKeys, [], '최신 API가 확인한 송장을 과거 원본의 송장 차이로 계속 막으면 안 됩니다.');
+    }
+    assert.equal(checked.fileActions.reviewRequired, false);
     s.assertSourceUntouched();
   });
 });
@@ -327,6 +340,68 @@ test('system0에서 반대로 선택한 두 송장을 네이버 조회와 비교
     assert.deepEqual(projected.naverRegistration, itemFor(checked, product).naverRegistration);
   }
   s.assertSourceUntouched();
+});
+
+test('네이버 조회 후에도 김은영의 완료·충돌 두 상품을 각각 정정하고 재조회 전까지 과거 관측과 엑셀을 보존한다', async t => {
+  const byId = new Map([high, superHigh].map(order => [order.productOrderId, order]));
+  const s = await setup(t, { naver: { queryProductOrders: async ids => ids.map(id => registeredOrder(byId.get(id), { trackingNumber: superHigh.trackingNumber })) } });
+  const initial = await s.start();
+  const wrong = await s.select(initial, [{ ...choiceFor(initial, high), trackingNumber: superHigh.trackingNumber },
+    { ...choiceFor(initial, superHigh), trackingNumber: high.trackingNumber }]);
+  const originalFile = await s.build(wrong);
+  const response = await fetch(s.base + `/api/invoices/${wrong.run.id}/check`, { method: 'POST' });
+  const observed = await response.json(); assert.equal(response.status, 200, JSON.stringify(observed));
+  assert.equal(itemFor(observed, high).registrationState, 'complete');
+  assert.equal(itemFor(observed, superHigh).registrationState, 'conflict');
+  const siblingBefore = JSON.stringify(itemFor(observed, high));
+  const firstCorrection = await s.select(observed, [choiceFor(observed, superHigh)]);
+  assert.equal(itemFor(firstCorrection, superHigh).trackingNumber, superHigh.trackingNumber);
+  assert.equal(JSON.stringify(itemFor(firstCorrection, high)), siblingBefore, '15cm 정정이 이미 등록 확인된 13cm를 바꾸면 안 됩니다.');
+  const corrected = await s.select(firstCorrection, [choiceFor(firstCorrection, high)]);
+  for (const product of [high, superHigh]) {
+    const item = itemFor(corrected, product);
+    assert.equal(item.trackingNumber, product.trackingNumber);
+    assert.equal(item.registrationRecheck, true);
+    assert.equal(item.statusFresh, false);
+    assert.notEqual(item.registrationState, 'complete', '직원 정정만으로 네이버 등록 완료를 추정하지 않습니다.');
+    assert.deepEqual(item.naverRegistration, { ...itemFor(observed, product).naverRegistration, fresh: false, matches: null });
+  }
+  const blocked = await fetch(s.base + `/api/invoices/${corrected.run.id}/export`);
+  assert.equal(blocked.status, 400, await blocked.text());
+  const saved = await fetch(s.base + `/api/invoices/${corrected.run.id}/download`);
+  assert.equal(saved.status, 200); assert.deepEqual(Buffer.from(await saved.arrayBuffer()), originalFile);
+  const recheckedResponse = await fetch(s.base + `/api/invoices/${corrected.run.id}/check`, { method: 'POST' });
+  const rechecked = await recheckedResponse.json(); assert.equal(recheckedResponse.status, 200, JSON.stringify(rechecked));
+  assert.equal(itemFor(rechecked, superHigh).registrationState, 'complete');
+  assert.equal(itemFor(rechecked, superHigh).naverRegistration.matches, true);
+  assert.equal(itemFor(rechecked, high).registrationState, 'conflict');
+  assert.equal(itemFor(rechecked, high).naverRegistration.matches, false);
+  assert.ok(itemFor(rechecked, high).registrationProblems.includes('tracking_conflict'));
+  assert.equal(itemFor(rechecked, high).trackingNumber, high.trackingNumber);
+  const after = await fetch(s.base + `/api/invoices/${corrected.run.id}/download`);
+  assert.deepEqual(Buffer.from(await after.arrayBuffer()), originalFile);
+  s.assertSourceUntouched();
+});
+
+test('네이버 조회의 주소·수량·취소 불일치는 로컬 송장 정정으로 우회할 수 없다', async t => {
+  for (const [problem, changes] of [['recipient_changed', { address: '서울 다른로 99', detailAddress: '202호' }],
+    ['quantity_changed', { remainQuantity: 2 }], ['claim', { status: 'CANCELED', remainQuantity: 0 }]]) {
+    await t.test(problem, async t => {
+      const byId = new Map([high, superHigh].map(order => [order.productOrderId, order]));
+      const s = await setup(t, { naver: { queryProductOrders: async ids => ids.map(id => registeredOrder(byId.get(id), id === high.productOrderId ? changes : {})) } });
+      const initial = await s.start(), assigned = await s.select(initial, [choiceFor(initial, high), choiceFor(initial, superHigh)]);
+      const response = await fetch(s.base + `/api/invoices/${assigned.run.id}/check`, { method: 'POST' });
+      const checked = await response.json(); assert.equal(response.status, 200, JSON.stringify(checked));
+      assert.ok(itemFor(checked, high).registrationProblems.includes(problem));
+      assert.equal(groupFor(checked, high).assignEligible, false);
+      const before = JSON.stringify(s.db.prepare('SELECT * FROM invoice_items ORDER BY id').all());
+      const rejected = await fetch(s.base + `/api/invoices/${assigned.run.id}/tracking`, jsonOptions({ expectedVersion: checked.viewVersion,
+        choices: [{ ...choiceFor(checked, high), trackingNumber: superHigh.trackingNumber }] }));
+      assert.equal(rejected.status, 400, await rejected.text());
+      assert.equal(JSON.stringify(s.db.prepare('SELECT * FROM invoice_items ORDER BY id').all()), before);
+      s.assertSourceUntouched();
+    });
+  }
 });
 
 test('미등록 응답은 일치로 표시하지 않고 조회 실패·근거 변경 뒤의 과거 네이버 송장은 최신으로 표시하지 않는다', async t => {

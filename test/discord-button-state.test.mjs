@@ -127,3 +127,35 @@ test('네이버 확인 뒤에도 송장 선택이 남으면 선택 메뉴를 바
   assert.ok(components(output).some(component => component.type === 3));
   assert.deepEqual(files(output), []);
 });
+
+test('네이버 등록 완료·송장 충돌 후에도 안전하게 정정할 수 있는 송장은 수정 메뉴를 제공한다', async () => {
+  for (const state of ['complete', 'conflict']) {
+    const group = { key: 'assigned-product', kind: 'assignment', mode: 'assign', assignEligible: true, needsSelection: false,
+      itemIds: [1], productOrderIds: ['202611160000000001'], selectedTrackingNumber: '45500000001',
+      recipient: '가상 수취인', optionName: '높이 13cm', candidates: [
+        { internalId: 'shipment-one', trackingNumber: '45500000001', valid: true },
+        { internalId: 'shipment-two', trackingNumber: '45500000002', valid: true },
+      ] };
+    const f = fixture({ currentSummary: { total: 1, ready: 0, complete: state === 'complete' ? 1 : 0 },
+      items: [{ id: 1, decision: 'include', registrationState: state }],
+      trackingReview: { groups: [group], pendingCount: 0, replacementCount: 0 },
+      fileActions: state === 'conflict' ? blocked : { create: false, saved: false, rebuild: false, reviewRequired: false } });
+    const status = await f.handle(f.event());
+    const edit = components(status).find(component => component.label === '송장 선택 수정');
+    assert.ok(edit, state);
+    const review = await f.handle(f.event({ action: undefined, buttonId: edit.custom_id }));
+    const menu = components(review).find(component => component.type === 3);
+    assert.ok(menu, state); assert.ok(menu.options.some(option => option.value === 'assign:45500000002'));
+    assert.ok(status.components.every(row => row.components.length <= 5));
+    assert.ok(review.components.every(row => row.components.length <= 5));
+    assert.equal(f.calls.some(route => route.endsWith('/check-date') || route.endsWith('/tracking')), false);
+  }
+});
+
+test('출고 근거가 불충분해 정정 불가인 등록 충돌에는 송장 수정 버튼을 붙이지 않는다', async () => {
+  const f = fixture({ items: [{ id: 1, registrationState: 'conflict' }], fileActions: blocked,
+    trackingReview: { groups: [{ kind: 'assignment', mode: 'assign', assignEligible: false, needsSelection: false }], pendingCount: 0 } });
+  const output = await f.handle(f.event());
+  assert.ok(!labels(output).includes('송장 선택 수정'));
+  assert.ok(!components(output).some(component => component.type === 3));
+});

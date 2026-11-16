@@ -203,20 +203,41 @@ test('중복·잘못된 묶음·이전 버전의 일괄 요청은 전체 취소�
   assert.equal(snapshot(), before);
 });
 
-test('실제 수취·저장 근거·네이버 등록 충돌은 직원 교체 선택으로 우회하지 않는다', async t => {
+test('실제 수취·저장 근거·네이버 주문 내용 충돌은 직원 교체 선택으로 우회하지 않는다', async t => {
   for (const kind of ['recipient', 'source', 'registration']) await t.test(kind, async t => {
     const { db, base, start, products } = setup(t);
     const next = start([base, order({ trackingNumber: second, round: 2,
       ...(kind === 'recipient' ? { address: '가상시 다른로 2 202호' } : {}) })]);
     if (kind === 'source') db.prepare("UPDATE rows SET is_deleted = 1 WHERE id = 1").run();
     if (kind === 'registration') await invoices.refreshInvoiceStatus(db, next.run.id,
-      { queryProductOrders: async () => products.map(product => registeredOrder(product, { trackingNumber: '001234569999' })) });
+      { queryProductOrders: async () => products.map(product => registeredOrder(product, { remainQuantity: 2 })) });
     const view = invoices.invoiceView(db, next.run.id), group = view.trackingReview.groups[0];
     assert.equal(group.replacementEligible, false);
     assert.throws(() => invoices.applyInvoiceTrackingReview(db, next.run.id, { expectedVersion: view.viewVersion,
       choices: [{ key: group.key, trackingNumber: second, mode: 'replace' }] }), /근거|충돌|유효/);
     assert.ok(invoices.invoiceDetail(db, next.run.id).items.every(item => item.physicalShipments.find(parcel => parcel.trackingNumber === first).valid !== false));
   });
+});
+
+test('같은 출고의 등록 완료 후 대표 송장을 정정하면 여러 상품을 함께 바꾸고 네이버 관측·상자·보관 엑셀을 유지한다', async t => {
+  const { db, base, products, start } = setup(t), next = start([base, order({ trackingNumber: second, round: 2 })]);
+  const choose = (view, trackingNumber) => invoices.applyInvoiceTrackingReview(db, view.run.id, { expectedVersion: view.viewVersion,
+    choices: [{ key: view.trackingReview.groups[0].key, trackingNumber, mode: 'split' }], actor: 'web' });
+  const selected = choose(invoices.invoiceView(db, next.run.id), first), file = invoices.exportInvoices(db, selected.run.id).buffer;
+  await invoices.refreshInvoiceStatus(db, next.run.id, { queryProductOrders: async () => products.map(product => registeredOrder(product)) });
+  const before = invoices.invoiceView(db, next.run.id);
+  assert.ok(before.items.every(item => item.registrationState === 'complete'));
+  const corrected = choose(before, second);
+  assert.ok(corrected.items.every(item => item.trackingNumber === second && item.registrationRecheck && !item.statusFresh));
+  assert.ok(corrected.items.every(item => item.naverRegistration.trackingNumber === first && !item.naverRegistration.fresh));
+  assert.ok(corrected.items.every(item => item.physicalShipments.every(parcel => parcel.valid === true)));
+  assert.equal(corrected.fileActions.create, false); assert.equal(corrected.fileActions.rebuild, false);
+  assert.deepEqual(invoices.downloadInvoices(db, next.run.id).buffer, file);
+  assert.equal(choose(corrected, second).viewVersion, corrected.viewVersion, '동일 선택을 재전송하면 조회나 이력을 초기화하지 않습니다.');
+  await invoices.refreshInvoiceStatus(db, next.run.id, { queryProductOrders: async () => products.map(product => registeredOrder(product, { trackingNumber: second })) });
+  const checked = invoices.invoiceView(db, next.run.id);
+  assert.ok(checked.items.every(item => item.registrationState === 'complete' && item.naverRegistration.matches));
+  assert.deepEqual(invoices.downloadInvoices(db, next.run.id).buffer, file);
 });
 
 test('여러 안전한 출고 묶음의 일괄 교체는 각 주문의 상품과 번호만 함께 변경한다', t => {
