@@ -21,6 +21,7 @@ function fixture({ laterOnly = false } = {}) {
     replacementEligible: laterOnly, replacementTrackingNumber: laterOnly ? '45500000002' : '' };
   const view = () => ({ run: { id: 7, sourceDate: event.date, savedFileAvailable: false },
     viewVersion: String(revision).repeat(64), currentSummary: { total: 2, ready: group.needsSelection ? 0 : 2, attention: group.needsSelection ? 2 : 0 },
+    fileActions: { create: !group.needsSelection, rebuild: false, saved: false, reviewRequired: group.needsSelection },
     items: [], trackingReview: { groups: [group], pendingCount: Number(group.needsSelection), replacementCount: Number(group.replacementEligible) } });
   const fetcher = async (url, options = {}) => {
     const route = String(url).startsWith(config.baseUrl) ? String(url).slice(config.baseUrl.length) : String(url);

@@ -50,6 +50,7 @@ test('채팅 첨부→직원 분할선택→실제 엑셀→정정파일 일괄�
   const initial = await handle(event({ action: 'create_invoice', date, attachments }));
   assert.equal(initial.files, undefined, initial.content);
   const menu = components(initial).find(c => c.type === 3); assert.ok(menu, initial.content);
+  assert.ok(!components(initial).some(c => /엑셀/.test(c.label || '')));
   assert.equal(app.locals.db.prepare('SELECT count(*) n FROM invoice_runs WHERE generated_at IS NOT NULL').get().n, 0);
   const selected = await handle(event({ buttonId: menu.custom_id, values: [`split:${second}`] }));
   assert.equal(selected.files, undefined);
@@ -58,6 +59,8 @@ test('채팅 첨부→직원 분할선택→실제 엑셀→정정파일 일괄�
   const originalBytes = generated.files[0].attachment;
   assert.deepEqual(rows(originalBytes).slice(1).map(row => [row[0], row[3]]), productIds.map(id => [id, second]));
   const before = await (await fetch(baseUrl + '/api/invoices/1')).json();
+  assert.equal(before.fileActions.saved, true);
+  assert.equal(before.fileActions.reviewRequired, false);
   assert.ok(before.items.every(item => item.trackingNumber === second && item.physicalShipments.filter(s => s.valid === true).length === 2));
   courierBytes = courier([second]);
   const correction = await handle(event({ action: 'replace_invoice', date, attachments }));

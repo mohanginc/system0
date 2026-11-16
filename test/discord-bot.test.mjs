@@ -10,7 +10,8 @@ import * as XLSX from 'xlsx';
 const scope = { guildId: '111111111111111111', channelId: '222222222222222222', userId: '333333333333333333' };
 const config = { secret: 'a'.repeat(64), guildId: scope.guildId, channelIds: [scope.channelId], userIds: [scope.userId],
   baseUrl: 'http://127.0.0.1:3000', publicOrigin: 'https://system0.example.com', naverPassword: 'private-file-password' };
-const detail = { run: { id: 7, sourceDate: '2026-11-13' }, viewVersion: 'version-1', currentSummary: { total: 2, complete: 0, ready: 2 } };
+const detail = { run: { id: 7, sourceDate: '2026-11-13' }, viewVersion: 'version-1', currentSummary: { total: 2, complete: 0, ready: 2 },
+  items: [{ decision: 'include', registrationState: 'unchecked' }], fileActions: { create: true, rebuild: false, saved: false, reviewRequired: false } };
 const event = { ...scope, id: '444444444444444444', action: 'create_invoice', date: '2026-11-13', attachments: [
   { name: 'naver.xlsx', size: 4, url: 'https://cdn.discordapp.com/attachments/123/456/naver.xlsx?ex=example' },
   { name: 'courier.xls', size: 4, url: 'https://media.discordapp.net/attachments/123/789/courier.xls?ex=example' },
