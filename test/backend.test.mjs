@@ -700,3 +700,23 @@ test('PATCH 수정·삭제의 잘못된 ID·중복·겹침·빈 제품명 또는
     WHEN NEW.cleaned_name = '저장 실패 테스트' BEGIN SELECT RAISE(ABORT, '검증용 저장 오류'); END`);
   await checkRejected({ changes: [{ ...change, cleanedName: '저장 실패 테스트' }], deletedRowIds: [deleteId] });
 });
+
+test('상품명 검수의 예상 값이 한 행이라도 바뀌면 전체 저장을 거절한다', async t => {
+  const app = createApp({ databasePath: ':memory:', client: null });
+  const server = await new Promise(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); app.locals.db.close(); });
+  const initial = importFiles(app.locals.db, [file([['상품명'], ['첫 주문'], ['두 번째 주문']])]);
+  const base = `http://127.0.0.1:${server.address().port}/api/batches/${initial.batch.id}`;
+  const patch = changes => fetch(`${base}/rows`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ changes }) });
+  const changes = initial.rows.map(({ id, cleanedName, status, reviewNote }, index) => ({ id,
+    cleanedName: `정리한 이름 ${index}`, status: 'review', reviewNote: '', expected: { cleanedName, status, reviewNote } }));
+  assert.equal((await patch([{ id: changes[1].id, cleanedName: '웹에서 수정', status: 'confirmed', reviewNote: '직원 검수' }])).status, 200);
+  const rejected = await patch(changes);
+  assert.equal(rejected.status, 409);
+  assert.equal((await rejected.json()).code, 'stale_order_review');
+  const preserved = await (await fetch(base)).json();
+  assert.deepEqual(preserved.rows.map(({ cleanedName, status, reviewNote }) => [cleanedName, status, reviewNote]),
+    [['', 'pending', ''], ['웹에서 수정', 'confirmed', '직원 검수']]);
+  assert.equal((await patch([changes[0]])).status, 200);
+  assert.equal((await (await fetch(base)).json()).rows[0].cleanedName, changes[0].cleanedName);
+});

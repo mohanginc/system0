@@ -20,7 +20,7 @@ import { CARRIERS, unlockNaverFiles, classifyInvoiceFiles, prepareInvoiceFile, i
   invoiceView, invoiceSourceView, invoiceDateRunIds, checkInvoiceDate, applyInvoiceTrackingReview, lookupInvoiceOrder } from './lib/invoices.mjs';
 import { readDiscordConfig, discordScopeAllowed, discordEnvPath } from './lib/discord-config.mjs';
 import { initializeDiscordWorkflow, claimDiscordRequest, finishDiscordRequest, discordContext, interpretDiscordRequest } from './lib/discord-workflow.mjs';
-import { invoiceAgentStep } from './lib/discord-invoice-agent.mjs';
+import { discordAgentStep } from './lib/discord-invoice-agent.mjs';
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 const envFile = process.env.SYSTEM0_ENV_FILE || path.join(projectRoot, '.env');
@@ -93,7 +93,7 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
   app.patch('/api/discord/requests/:requestId', (request, response) => response.json({ request: finishDiscordRequest(db, request.params.requestId, request.body) }));
   app.get('/api/discord/context', (request, response) => response.json(discordContext(db, request.query)));
   app.post('/api/discord/interpret', async (request, response) => response.json(await interpretDiscordRequest(db, request.body, ai, model)));
-  app.post('/api/discord/agent-step', async (request, response) => response.json(await invoiceAgentStep(db, request.body, ai, model)));
+  app.post('/api/discord/agent-step', async (request, response) => response.json(await discordAgentStep(db, request.body, ai, model)));
   const excelFileFilter = (_request, file, done) => {
       // Multipart filenames are transmitted as UTF-8 bytes by browsers.
       if ([...file.originalname].every(character => character.codePointAt(0) <= 255)) {
@@ -296,7 +296,12 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
   });
   app.patch('/api/batches/:id/rows', (request, response) => {
     const id = ensureBatch(request, response, true);
-    if (id) response.json(reviseRows(db, id, request.body?.changes, request.body?.deletedRowIds));
+    if (!id) return;
+    try { response.json(reviseRows(db, id, request.body?.changes, request.body?.deletedRowIds)); }
+    catch (error) {
+      if (error.code === 'stale_order_review') response.status(409).json({ error: error.message, code: error.code });
+      else throw error;
+    }
   });
   app.delete('/api/batches/:id', (request, response) => {
     const id = ensureBatch(request, response, true);

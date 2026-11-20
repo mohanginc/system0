@@ -376,9 +376,17 @@ async function start() {
   try {
     const status = await api('/api/status'); keyConfigured = status.apiKeyConfigured;
     $('connection-status').textContent = keyConfigured ? 'API 키 등록됨 · 로컬 저장' : 'API 키 미설정 · 기존 이름 재사용 가능';
-    await loadHistory(); await showDayOverview();
+    const linkedBatch = new URLSearchParams(location.search).get('batch');
+    let linkedError;
+    if (/^[1-9]\d*$/.test(linkedBatch || '')) {
+      try { applyDetail(await api(`/api/batches/${linkedBatch}`)); }
+      catch (error) { linkedError = error.message; }
+    }
+    await loadHistory();
+    if (!current) await showDayOverview();
     if (current?.batch.running) resumeProgress(current.batch.id);
-    if (!keyConfigured) message('기존 이름은 재사용할 수 있습니다. 처음 보는 상품을 AI로 정리하려면 API 키를 설정하고 앱을 다시 실행하세요.');
+    if (linkedError) message(linkedError, true);
+    else if (!keyConfigured) message('기존 이름은 재사용할 수 있습니다. 처음 보는 상품을 AI로 정리하려면 API 키를 설정하고 앱을 다시 실행하세요.');
   } catch (error) { message(`서버 연결을 확인하세요. ${error.message}`, true); } finally { setBusy(false); }
 }
 function resumeProgress(id) {
