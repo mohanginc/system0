@@ -172,6 +172,24 @@ test('네이버 발송 대상 밖의 같은 출고 건은 저장 주문과 로�
   assert.deepEqual(s.naverCalls.flat(), [naverOrder.productOrderId]);
 });
 
+test('네이버 조회 응답의 송장 작업번호만 확인한 system0 작업 링크로 표시합니다', async t => {
+  const a = order(1), s = await boot(t, [a]);
+  const before = await s.start([a]), runId = before.run.id;
+  const output = await s.run(`${date} 네이버 송장 등록 상태를 알려줘`, [
+    tool('check_invoice_registration', { date }),
+    result => {
+      assert.deepEqual(result.runIds, [runId]);
+      return `송장 작업 #${runId}에서 등록을 확인했습니다.\n`
+        + `송장 작업 \`#${runId}\`의 내역과 송장 작업 **#${runId}**의 번호입니다.\n`
+        + `주문 작업 #${runId}와 확인되지 않은 송장 작업 #99999는 참조 번호입니다.`;
+    },
+  ]);
+  const workLink = `송장 작업 [#${runId}](https://system0.example/invoices.html?run=${runId})`;
+  assert.ok(output.content.includes(`${workLink}에서 등록을 확인했습니다.`), output.content);
+  assert.ok(output.content.includes(`${workLink}의 내역과 ${workLink}의 번호입니다.`), output.content);
+  assert.ok(output.content.includes(`주문 작업 #${runId}와 확인되지 않은 송장 작업 #99999`), output.content);
+});
+
 test('누락을 확인해 보류·제외 사유를 저장하고 남은 주문만 웹과 같은 업로드 엑셀에 담습니다', async t => {
   const ready = order(1), hold = order(2), exclude = order(3);
   const s = await boot(t, [ready]);
