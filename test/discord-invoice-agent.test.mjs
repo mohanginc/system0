@@ -142,6 +142,36 @@ test('상품주문번호로 찾은 분리 배송 건을 비교·정정·재조�
     .map(call => call.body.validateOnly === true), [true, false]);
 });
 
+test('네이버 발송 대상 밖의 같은 출고 건은 저장 주문과 로젠 원본 위치를 한 항목에 보여줍니다', async t => {
+  const naverOrder = order(1);
+  const outside = order(2, { orderId: '20261116-0000002', productName: '[coupang] 가상 제품 2' });
+  const s = await boot(t, [naverOrder, outside], [naverOrder]);
+  const before = await s.start([naverOrder], [naverOrder, outside]), runId = before.run.id;
+  assert.equal(before.currentOutsideOrders.find(row => row.orderId === outside.orderId)?.internalId, outside.internalId);
+  assert.equal(before.unmatchedCouriers.find(row => row.trackingNumber === outside.trackingNumber)?.internalId, outside.internalId);
+
+  const output = await s.run(`${date} 네이버 등록 상태를 조회하고 참고할 출고는 어느 파일에서 찾았는지 쉽게 알려줘`, [
+    tool('check_invoice_registration', { date }),
+    result => { assert.deepEqual(result.runIds, [runId]); return tool('read_invoice', { runId }); },
+    result => {
+      const notes = result.sourceNotes.filter(note => note.orderId === outside.orderId || note.trackingNumbers.includes(outside.trackingNumber));
+      assert.equal(notes.length, 1, '같은 내부 출고는 보고에 한 번만 들어갑니다.');
+      const [note] = notes;
+      assert.equal(note.orderId, outside.orderId);
+      assert.deepEqual(note.trackingNumbers, [outside.trackingNumber]);
+      assert.deepEqual(note.savedOrderSource, { file: '가상_확인주문.xlsx', row: 3 });
+      assert.deepEqual(note.courierSources, [{ file: '가상_월요일_로젠송장.xlsx', row: 3, trackingNumber: outside.trackingNumber }]);
+      assert.equal(note.registration, '이번 네이버 발송 대상에 없어 등록 여부는 조회하지 않았습니다.');
+      const { file, row, trackingNumber } = note.courierSources[0];
+      return `저장 주문 엑셀 ${note.savedOrderSource.file} ${note.savedOrderSource.row}행의 체결번호 ${note.orderId}와 `
+        + `로젠 송장 엑셀 ${file} ${row}행의 송장번호 ${trackingNumber}는 같은 출고 건입니다. ${note.registration}`;
+    },
+  ]);
+  assert.match(output.content, /저장 주문 엑셀.*3행의 체결번호.*로젠 송장 엑셀.*3행의 송장번호.*같은 출고 건/);
+  assert.match(output.content, /등록 여부는 조회하지 않았습니다/);
+  assert.deepEqual(s.naverCalls.flat(), [naverOrder.productOrderId]);
+});
+
 test('누락을 확인해 보류·제외 사유를 저장하고 남은 주문만 웹과 같은 업로드 엑셀에 담습니다', async t => {
   const ready = order(1), hold = order(2), exclude = order(3);
   const s = await boot(t, [ready]);
