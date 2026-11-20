@@ -2,7 +2,7 @@ import { existsSync } from 'node:fs';
 import { loadEnvFile } from 'node:process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { Client, Events, GatewayIntentBits, MessageFlags, SlashCommandBuilder } from 'discord.js';
+import { Client, Events, GatewayIntentBits, MessageFlags, MessageType, SlashCommandBuilder } from 'discord.js';
 import { readDiscordConfig, discordScopeAllowed, discordEnvPath } from '../lib/discord-config.mjs';
 import { createDiscordHandler, discordAttachment } from '../lib/discord-bot.mjs';
 
@@ -37,16 +37,33 @@ client.once(Events.ClientReady, async ready => {
   }
 });
 client.on(Events.MessageCreate, async message => {
-  if (message.author.bot || !message.mentions.users.has(client.user.id) || !discordScopeAllowed(config, scope(message))) return;
+  if (message.author.bot || !discordScopeAllowed(config, scope(message))) return;
   let pending;
   try {
+    const tagged = message.mentions.users.has(client.user.id);
+    const ref = message.type === MessageType.Reply && message.reference;
+    const replyToId = ref && ref.channelId === message.channelId && (!ref.guildId || ref.guildId === message.guildId) ? ref.messageId : null;
+    if (!tagged) {
+      if (!replyToId) return;
+      const replyAuthor = message.mentions.repliedUser || (await message.fetchReference().catch(() => null))?.author;
+      if (replyAuthor?.id !== client.user.id) return;
+    }
+    if (replyToId && !message.content) {
+      await message.reply({ content: '답장 본문을 읽으려면 같은 메시지에 @system0을 멘션해 주세요.', allowedMentions });
+      return;
+    }
     pending = await message.reply({ content: '처리 중…', allowedMentions });
+    let delivered = false;
     const output = await handle({ id: message.id, kind: 'message', ...scope(message),
+      botMessageId: pending.id, replyToId,
       text: message.content.replace(new RegExp(`<@!?${client.user.id}>`, 'g'), '').trim(),
       attachments: [...message.attachments.values()].map(discordAttachment) },
-    { onProgress: content => pending.edit({ content, allowedMentions }) });
-    if (output) await pending.edit({ ...output, allowedMentions });
-    else await pending.delete();
+    { onProgress: content => pending.edit({ content, allowedMentions }), onResult: async result => {
+      await pending.edit({ ...result, allowedMentions });
+      delivered = true;
+    } });
+    if (output && !delivered) await pending.edit({ ...output, allowedMentions });
+    else if (!output) await pending.delete();
   } catch {
     if (pending) await pending.edit({ content: '결과를 전달하지 못했습니다. system0에서 작업 상태를 확인해 주세요.', allowedMentions }).catch(() => {});
   }

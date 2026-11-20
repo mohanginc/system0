@@ -20,6 +20,7 @@ import { CARRIERS, unlockNaverFiles, classifyInvoiceFiles, prepareInvoiceFile, i
   invoiceView, invoiceSourceView, invoiceDateRunIds, checkInvoiceDate, applyInvoiceTrackingReview, lookupInvoiceOrder } from './lib/invoices.mjs';
 import { readDiscordConfig, discordScopeAllowed, discordEnvPath } from './lib/discord-config.mjs';
 import { initializeDiscordWorkflow, claimDiscordRequest, finishDiscordRequest, discordContext, interpretDiscordRequest } from './lib/discord-workflow.mjs';
+import { initializeDiscordConversations, loadDiscordConversation, saveDiscordConversation, pruneDiscordConversations } from './lib/discord-conversations.mjs';
 import { discordAgentStep } from './lib/discord-invoice-agent.mjs';
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
@@ -48,7 +49,10 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
     publicHost = url.host;
   }
   const db = openDatabase(databasePath);
-  if (discordConfig) initializeDiscordWorkflow(db);
+  if (discordConfig) {
+    initializeDiscordWorkflow(db);
+    initializeDiscordConversations(db);
+  }
   const ai = client === undefined ? (apiKey ? new OpenAI({ apiKey, timeout: 120000, maxRetries: 0 }) : null) : client;
   const running = new Set();
   let previewRunning = false;
@@ -56,6 +60,7 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
   const app = express();
   app.disable('x-powered-by');
   app.locals.db = db;
+  if (discordConfig) app.locals.pruneDiscordConversations = () => pruneDiscordConversations(db);
   app.use((request, response, next) => {
     const host = request.get('host') || '';
     const localHost = /^(localhost|127\.0\.0\.1)(:\d+)?$/.test(host);
@@ -92,6 +97,8 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
   });
   app.patch('/api/discord/requests/:requestId', (request, response) => response.json({ request: finishDiscordRequest(db, request.params.requestId, request.body) }));
   app.get('/api/discord/context', (request, response) => response.json(discordContext(db, request.query)));
+  app.post('/api/discord/conversation/load', (request, response) => response.json(loadDiscordConversation(db, request.body)));
+  app.post('/api/discord/conversation/save', (request, response) => response.json(saveDiscordConversation(db, request.body)));
   app.post('/api/discord/interpret', async (request, response) => response.json(await interpretDiscordRequest(db, request.body, ai, model)));
   app.post('/api/discord/agent-step', async (request, response) => response.json(await discordAgentStep(db, request.body, ai, model)));
   const excelFileFilter = (_request, file, done) => {
@@ -351,8 +358,13 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('PORT는 1~65535 사이여야 합니다.');
   const app = createApp();
   const server = app.listen(port, '127.0.0.1', () => console.log(`system0: http://127.0.0.1:${port}`));
+  const cleanupTimer = app.locals.pruneDiscordConversations ? setInterval(() => {
+    try { app.locals.pruneDiscordConversations(); }
+    catch { console.error('만료된 디스코드 대화를 정리하지 못했습니다.'); }
+  }, 60 * 60 * 1000).unref() : null;
   server.on('error', error => {
     console.error(error.code === 'EADDRINUSE' ? `포트 ${port}를 이미 사용 중입니다. PORT 값을 바꿔 주세요.` : '서버를 시작하지 못했습니다.');
+    clearInterval(cleanupTimer);
     app.locals.db.close();
     process.exitCode = 1;
     if (process.connected) process.disconnect();
@@ -361,6 +373,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const close = () => {
     if (closing) return;
     closing = true;
+    clearInterval(cleanupTimer);
     server.close(() => { app.locals.db.close(); process.exit(0); });
   };
   process.on('SIGINT', close);
