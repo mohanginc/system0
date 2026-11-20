@@ -640,7 +640,8 @@ async function saveReview() {
     }
     body.issueResolutions = body.issueResolutions.filter(issue => next.issues.some(value => value.key === issue.key));
     if (body.changes.length || body.issueResolutions.length) {
-      next = await api(`/api/invoices/${next.run.id}/items`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      next = await api(`/api/invoices/${next.run.id}/items`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...body, expectedVersion: next.viewVersion }) });
     }
     reviewSaved = true;
     showRun(next); message('검토 내용을 저장했습니다.'); await loadHistory();
@@ -678,8 +679,8 @@ async function downloadExcel(mode = primaryDownloadMode()) {
   let downloadStarted = false;
   setBusy(true); message(mode === 'saved' ? '보관된 엑셀을 내려받고 있습니다.' : '네이버 업로드용 엑셀을 만들고 있습니다.');
   try {
-    const route = mode === 'export' ? 'export' : mode === 'rebuild' ? 'download?rebuild=1' : 'download';
-    const response = await fetch(`/api/invoices/${current.run.id}/${route}`, { cache: 'no-store', signal: AbortSignal.timeout(60000) });
+    const response = await fetch(`/api/invoices/${current.run.id}/file`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ mode, expectedVersion: current.viewVersion }), cache: 'no-store', signal: AbortSignal.timeout(60000) });
     if (!response.ok) { const data = await response.json(); throw new Error(data.error || '엑셀을 만들지 못했습니다.'); }
     const blob = await response.blob(), url = URL.createObjectURL(blob), link = element('a');
     const disposition = response.headers.get('content-disposition') || '', match = disposition.match(/filename\*=UTF-8''([^;]+)/i);

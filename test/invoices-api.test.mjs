@@ -62,6 +62,71 @@ async function addSource(request) {
   return response.json();
 }
 
+test('상품주문번호는 정확히 일치하는 최신 작업만 찾고 날짜를 같이 돌려줍니다', async t => {
+  const { app, request } = await boot(t), { batch } = await addSource(request);
+  const match = async extra => {
+    const body = invoiceForm(extra, [batch.id]);
+    body.append('sourceDate', '2026-11-16');
+    const response = await request('/api/invoices/import', { method: 'POST', body });
+    assert.equal(response.status, 201);
+    return response.json();
+  };
+  const earlier = await match(false), latest = await match(true);
+  const lookup = productOrderId => request('/api/invoices/lookup?' + new URLSearchParams({ productOrderId }));
+  assert.notEqual(earlier.run.id, latest.run.id);
+  const expected = { runId: latest.run.id, sourceDate: '2026-11-16', productOrderId: productIds[0] };
+  assert.deepEqual(await (await lookup(productIds[0])).json(), { matches: [expected] });
+  assert.deepEqual(await (await lookup(productIds[0].slice(0, -1))).json(), { matches: [] });
+  assert.equal((await lookup(`${productIds[0]} `)).status, 400);
+  assert.equal((await lookup('2.0261021e17')).status, 400);
+
+  const oldView = await (await request(`/api/invoices/${earlier.run.id}`)).json();
+  const superseded = await request(`/api/invoices/${earlier.run.id}/items`, json('PATCH', {
+    expectedVersion: oldView.viewVersion, changes: [{ id: oldView.items[0].id, decision: 'hold', note: '최신 작업에서 처리' }],
+  }));
+  assert.equal(superseded.status, 409);
+  assert.equal((await superseded.json()).code, 'stale_invoice_version');
+  assert.equal((await (await request(`/api/invoices/${earlier.run.id}`)).json()).items[0].note, '');
+
+  app.locals.db.prepare("UPDATE invoice_runs SET store = '별도 스토어' WHERE id = ?").run(earlier.run.id);
+  assert.deepEqual(await (await lookup(productIds[0])).json(), { matches: [expected, { ...expected, runId: earlier.run.id }] });
+});
+
+test('공용 검토 저장은 이전 버전을 거절하고 미등록 파일을 생성해도 기존 보관본을 유지합니다', async t => {
+  const { request } = await boot(t, { queryProductOrders: async ids => ids.map(id => remote(id, id === productIds[0]
+    ? {} : { status: 'PAYED', trackingNumber: '', deliveryCompanyCode: '' })) });
+  const { batch } = await addSource(request);
+  const imported = await request('/api/invoices/import', { method: 'POST', body: invoiceForm(false, [batch.id]) });
+  assert.equal(imported.status, 201);
+  const initial = await imported.json(), route = `/api/invoices/${initial.run.id}`;
+  const read = () => request(route).then(response => response.json());
+  const file = (view, mode) => request(route + '/file', json('POST', { mode, expectedVersion: view.viewVersion }));
+  const review = (view, note) => request(route + '/items', json('PATCH', { expectedVersion: view.viewVersion,
+    changes: [{ id: initial.items[1].id, decision: 'include', note }] }));
+
+  const saved = await file(initial, 'export');
+  assert.equal(saved.status, 200);
+  const archive = Buffer.from(await saved.arrayBuffer());
+  const latest = await read(), changed = await review(latest, '웹 검토 사유');
+  assert.equal(changed.status, 200);
+  const stale = await review(latest, '이전 버전 메모');
+  assert.equal(stale.status, 409);
+  assert.equal((await stale.json()).code, 'stale_invoice_version');
+  assert.equal((await read()).items.find(item => item.id === initial.items[1].id).note, '웹 검토 사유');
+
+  const checked = await request(route + '/check', { method: 'POST' });
+  assert.equal(checked.status, 200);
+  const view = await checked.json(), pending = await file(view, 'export');
+  assert.equal(view.items[0].registrationState, 'complete');
+  assert.equal(pending.status, 200);
+  const workbook = XLSX.read(Buffer.from(await pending.arrayBuffer()), { type: 'buffer' });
+  const rows = XLSX.utils.sheet_to_json(workbook.Sheets['발송처리'], { header: 1, raw: true });
+  assert.deepEqual(rows.slice(1).map(row => row[0]), [productIds[1]]);
+  const downloaded = await file(await read(), 'saved');
+  assert.equal(downloaded.status, 200);
+  assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()), archive);
+});
+
 test('송장 API는 다른 날짜의 같은 주문 근거도 연결하고 하단 미연결 송장은 검수 없이 합배송 엑셀을 내보낸다', async t => {
   const { app, request } = await boot(t);
   const a = await addSource(request), b = await addSource(request);
@@ -106,6 +171,50 @@ test('송장 API는 다른 날짜의 같은 주문 근거도 연결하고 하단
   assert.equal(again.run.id, id);
   assert.equal(app.locals.db.prepare('SELECT count(*) AS n FROM source_files').get().n, sources);
   assert.equal((await (await request('/api/invoices')).json()).runs.length, 1);
+});
+
+test('송장 선택과 검토의 사전 확인은 저장 규칙과 버전을 검사하고 DB에 쓰지 않는다', async t => {
+  const { app, request } = await boot(t), { batch } = await addSource(request);
+  const second = '001234567891', body = invoiceForm(false, [batch.id]);
+  const courier = file('송장 후보.xlsx', [['차수', '순번', '운송장번호', '주문번호', '원송장번호', '발행횟수', '출력시간', '수취인명', '전화번호', '주소'],
+    [1, 1, tracking, internalId, '', 1, '10:00:00', recipient, phone, address],
+    [2, 1, second, internalId, '', 1, '10:10:00', recipient, phone, address]]);
+  body.set('courierFiles', new Blob([courier.buffer]), courier.name);
+  const imported = await request('/api/invoices/import', { method: 'POST', body });
+  assert.equal(imported.status, 201);
+  const initial = await imported.json(), route = `/api/invoices/${initial.run.id}`;
+  const group = initial.trackingReview.groups.find(group => group.splitEligible);
+  assert.ok(group);
+  const countWrites = () => app.locals.db.prepare('SELECT total_changes() AS n').get().n;
+  const writes = countWrites();
+  const selection = { expectedVersion: initial.viewVersion, choices: [{ key: group.key, mode: 'split', trackingNumber: second }] };
+  const review = { expectedVersion: initial.viewVersion, changes: [{ id: initial.items[0].id, decision: 'hold', note: '택배사 확인' }] };
+  const confirm = (suffix, method, payload) => request(route + suffix, json(method, { ...payload, validateOnly: true }));
+
+  for (const [suffix, method, payload] of [['/tracking', 'POST', selection], ['/items', 'PATCH', review]]) {
+    const checked = await confirm(suffix, method, payload);
+    assert.equal(checked.status, 200);
+    assert.deepEqual(await checked.json(), { valid: true });
+    const stale = await confirm(suffix, method, { ...payload, expectedVersion: '0'.repeat(64) });
+    assert.equal(stale.status, 409);
+    assert.equal((await stale.json()).code, 'stale_invoice_version');
+  }
+  const invalidSelection = { ...selection, choices: [{ ...selection.choices[0], trackingNumber: '000000000000' }] };
+  const invalidReview = { ...review, changes: [{ ...review.changes[0], id: -1 }] };
+  assert.equal((await confirm('/tracking', 'POST', invalidSelection)).status, 400);
+  assert.equal((await confirm('/items', 'PATCH', invalidReview)).status, 400);
+  assert.equal(countWrites(), writes);
+  const unchanged = await (await request(route)).json();
+  assert.equal(unchanged.viewVersion, initial.viewVersion);
+  assert.equal(unchanged.items[0].note, '');
+
+  const saved = await request(route + '/tracking', json('POST', selection));
+  assert.equal(saved.status, 200);
+  const selected = await saved.json();
+  assert.ok(selected.items.every(item => item.trackingNumber === second));
+  const savedReview = await request(route + '/items', json('PATCH', { ...review, expectedVersion: selected.viewVersion }));
+  assert.equal(savedReview.status, 200);
+  assert.equal((await savedReview.json()).items[0].note, '택배사 확인');
 });
 
 test('최종①에만 있는 상품주문을 API 재개에도 표시하고 경고 확인 후에도 송장 없이 강제 포함하지 않는다', async t => {

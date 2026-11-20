@@ -129,7 +129,19 @@ test('송장 선택과 메모를 함께 저장할 때 선택 전의 보류 상�
   h.context.mockApi = async (url, options) => { h.calls.push({ url, body: JSON.parse(options.body) }); return saved; };
   h.run("saveItemDraft(current.items[0],{note:'가상 메모'}); saveTrackingDraft(current.trackingReview.groups[0],{trackingNumber:'001234567002',mode:'replace'});");
   await h.run('saveReview()');
-  assert.deepEqual(h.calls[1].body.changes, [{ id: 1, decision: 'include', note: '가상 메모' }]);
+  assert.deepEqual(h.calls[1].body, { expectedVersion: 'version-2', issueResolutions: [],
+    changes: [{ id: 1, decision: 'include', note: '가상 메모' }] });
+});
+
+test('웹 파일은 명시한 모드와 작업 버전을 공용 API에 전달한다', async () => {
+  const h = harness(), calls = [];
+  h.context.fetch = async (url, options) => {
+    calls.push({ url, method: options.method, body: JSON.parse(options.body) });
+    return { ok: false, json: async () => ({ error: '최신 작업을 확인해 주세요.' }) };
+  };
+  for (const mode of ['export', 'saved', 'rebuild']) await h.run(`downloadExcel('${mode}')`);
+  assert.deepEqual(calls, ['export', 'saved', 'rebuild'].map(mode => ({ url: '/api/invoices/8/file', method: 'POST',
+    body: { mode, expectedVersion: 'version-1' } })));
 });
 
 test('저장한 분할 대표 송장을 같은 화면에서 정정하고 무효 송장은 선택하지 못한다', async () => {

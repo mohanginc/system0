@@ -17,9 +17,10 @@ import { previewShippingBoard } from './lib/shipping-preview.mjs';
 import { productCatalog, addProduct, linkProductName } from './lib/products.mjs';
 import { CARRIERS, unlockNaverFiles, classifyInvoiceFiles, prepareInvoiceFile, importInvoiceFiles, listInvoiceRuns, listInvoiceDrafts, reviseInvoiceItems,
   exportInvoices, downloadInvoices, latestInvoice, refreshInvoiceStatus, refreshOutsideInvoiceStatus,
-  invoiceView, invoiceSourceView, invoiceDateRunIds, checkInvoiceDate, applyInvoiceTrackingReview } from './lib/invoices.mjs';
+  invoiceView, invoiceSourceView, invoiceDateRunIds, checkInvoiceDate, applyInvoiceTrackingReview, lookupInvoiceOrder } from './lib/invoices.mjs';
 import { readDiscordConfig, discordScopeAllowed, discordEnvPath } from './lib/discord-config.mjs';
 import { initializeDiscordWorkflow, claimDiscordRequest, finishDiscordRequest, discordContext, interpretDiscordRequest } from './lib/discord-workflow.mjs';
+import { invoiceAgentStep } from './lib/discord-invoice-agent.mjs';
 
 const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 const envFile = process.env.SYSTEM0_ENV_FILE || path.join(projectRoot, '.env');
@@ -92,6 +93,7 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
   app.patch('/api/discord/requests/:requestId', (request, response) => response.json({ request: finishDiscordRequest(db, request.params.requestId, request.body) }));
   app.get('/api/discord/context', (request, response) => response.json(discordContext(db, request.query)));
   app.post('/api/discord/interpret', async (request, response) => response.json(await interpretDiscordRequest(db, request.body, ai, model)));
+  app.post('/api/discord/agent-step', async (request, response) => response.json(await invoiceAgentStep(db, request.body, ai, model)));
   const excelFileFilter = (_request, file, done) => {
       // Multipart filenames are transmitted as UTF-8 bytes by browsers.
       if ([...file.originalname].every(character => character.codePointAt(0) <= 255)) {
@@ -141,6 +143,9 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
     try { batchIds = JSON.parse(request.query.batchIds); }
     catch { throw new Error('조회할 확인한 주문 작업을 선택해 주세요.'); }
     response.json(invoiceSourceView(db, batchIds));
+  });
+  app.get('/api/invoices/lookup', (request, response) => {
+    response.json({ matches: lookupInvoiceOrder(db, request.query.productOrderId) });
   });
   app.post('/api/invoices/check-date', async (request, response) => {
     if (!request.body || Object.keys(request.body).some(key => key !== 'date')) throw new Error('등록 상태를 확인할 날짜만 지정해 주세요.');
@@ -196,7 +201,15 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
   });
   app.patch('/api/invoices/:id/items', (request, response) => {
     const id = ensureInvoice(request, response, true);
-    if (id) { reviseInvoiceItems(db, id, request.body); response.json(invoiceView(db, id)); }
+    if (!id) return;
+    try {
+      const result = reviseInvoiceItems(db, id, request.body);
+      response.json(request.body?.validateOnly ? result : invoiceView(db, id));
+    }
+    catch (error) {
+      if (error.code === 'stale_invoice_version') response.status(409).json({ error: error.message, code: error.code });
+      else throw error;
+    }
   });
   app.post('/api/invoices/:id/tracking', (request, response) => {
     const id = ensureInvoice(request, response, true);
