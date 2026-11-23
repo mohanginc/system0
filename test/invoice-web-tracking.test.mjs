@@ -62,6 +62,37 @@ test('처리 방식을 고르지 않은 송장은 저장하지 않고 선택 초
   assert.match(h.nodes.get('message').textContent, /교체·분할/);
 });
 
+test('원송장 행 없이 번호만 있는 재출력도 두 후보를 표시하고 라벨 확인 뒤 저장한다', async () => {
+  const group = reviewGroup({ kind: 'reprint_reference', replaceEligible: true, replacementEligible: false,
+    candidates: [{ trackingNumber: '001234567001', role: 'original', referenceOnly: true, valid: null, selectable: true },
+      { trackingNumber: '001234567002', role: 'reprint', selectable: true }] });
+  const h = harness(detail({ trackingReview: { groups: [group], pendingCount: 1 } }));
+  const controls = () => h.run("trackingChoices({recipient:'모의 수취인',trackingNumbers:[]},current.items)").children[0];
+  const select = controls().children[0].children[0];
+  assert.deepEqual(Array.from(select.children.slice(1), option => option.textContent),
+    ['원송장 (번호만 있음) · 001234567001', '재출력 송장 · 001234567002']);
+  assert.equal(select.children[1].disabled, false);
+  select.value = '001234567001'; select.listeners.get('change')();
+  await h.run('saveReview()');
+  assert.equal(h.calls.length, 0);
+  const check = controls().children[1].children[0];
+  check.checked = true; check.listeners.get('change')();
+  await h.run('saveReview()');
+  assert.deepEqual(h.calls[0].body.choices, [{ key: group.key, trackingNumber: '001234567001', mode: 'replace', acknowledgeOriginal: true }]);
+});
+
+test('보관 엑셀의 재출력 송장을 선택한 뒤에는 미등록 대상 엑셀과 보관본을 구분한다', () => {
+  const group = reviewGroup({ kind: 'reprint_reference', mode: 'replace', needsSelection: false });
+  const initial = detail({ run: { id: 8, generatedAt: '2026-11-23T00:53:00Z', savedFileAvailable: true },
+    trackingReview: { groups: [group], pendingCount: 0 } });
+  initial.items[0].registrationState = 'complete';
+  const h = harness(initial);
+  assert.equal(h.run('primaryDownloadMode()'), 'export');
+  assert.equal(h.run('storedDownloadMode()'), 'saved');
+  h.run("current.items[1].registrationState = 'complete';");
+  assert.equal(h.run('primaryDownloadMode()'), 'saved');
+});
+
 test('송장 선택이 남으면 새 파일 생성을 막고 정확한 남은 건수를 표시한다', () => {
   const h = harness(); h.run('refreshControls()');
   assert.equal(h.nodes.get('export-button').disabled, true);

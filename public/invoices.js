@@ -30,6 +30,9 @@ function scopeUnavailable() { return current && (current.scopeRequired || !Array
 function downloadItems() { return (current?.items || []).filter(item => item.decision === 'include' && item.registrationState !== 'complete' && !item.sourceRegistered); }
 function storedDownloadMode() { return current?.run.savedFileAvailable ? 'saved' : 'rebuild'; }
 function primaryDownloadMode() {
+  if (current?.run.savedFileAvailable && current.trackingReview?.groups.some(group => group.kind === 'reprint_reference' && group.mode)) {
+    return downloadItems().length ? 'export' : 'saved';
+  }
   if (current?.run.generatedAt && (current.items.some(item => item.trackingSelection)
     || current.trackingReview?.groups.some(group => group.mode))) return 'rebuild';
   if (current?.run.generatedAt && current.currentOrders?.some(readOnlyOrder)) return storedDownloadMode();
@@ -73,7 +76,7 @@ function refreshControls() {
   if (current) $('export-note').textContent = dirty ? '변경한 검토 내용을 먼저 저장하세요.'
     : mode === 'saved' ? '이미 생성한 파일을 그대로 다시 내려받습니다. 네이버 등록 상태는 아래에서 확인하세요.'
     : current.rematchRequired ? '다른 날짜의 주문까지 확인하려면 같은 ①·③ 파일을 다시 선택해 매칭하세요.'
-    : pendingTracking ? `송장 선택 ${count(pendingTracking)}건이 남았습니다. 교체 또는 분할 상자를 선택한 뒤 저장하세요.`
+    : pendingTracking ? `송장 선택 ${count(pendingTracking)}건이 남았습니다. 적용할 송장을 선택하고 저장하세요.`
     : unresolved ? '주문 행의 경고를 확인한 뒤 검토 내용을 저장하세요. 메모는 선택 사항입니다.'
     : blocked ? '연결 근거가 부족하거나 등록 송장이 다른 포함 항목을 보류·제외해 주세요.'
     : mode === 'rebuild' ? `현재 매칭 ${count(included)}건으로 새 엑셀을 만듭니다. 등록 완료 건도 포함됩니다.`
@@ -361,7 +364,11 @@ function shipmentHistory(items) {
 }
 function saveTrackingDraft(group, fields) {
   const next = { trackingNumber: group.selectedTrackingNumber || '', mode: group.mode || '', ...trackingChanges.get(group.key), ...fields };
-  if (next.mode === 'replace' && !group.candidates.some(candidate => candidate.trackingNumber === next.trackingNumber && candidate.currentFile)
+  const candidate = group.candidates.find(candidate => candidate.trackingNumber === next.trackingNumber);
+  if (group.kind === 'reprint_reference') {
+    next.mode = candidate?.selectable && group.replaceEligible ? 'replace' : '';
+    if (!candidate?.referenceOnly || !next.acknowledgeOriginal) delete next.acknowledgeOriginal;
+  } else if (next.mode === 'replace' && !candidate?.currentFile
     || next.mode === 'split' && group.splitEligible === false
     || next.mode === 'assign' && (group.kind !== 'assignment' || group.assignEligible === false)) next.mode = '';
   if (next.trackingNumber === (group.selectedTrackingNumber || '') && next.mode === (group.mode || '')) trackingChanges.delete(group.key);
@@ -381,6 +388,7 @@ function trackingChoices(order, linked) {
   }
   for (const group of groups) {
     const assignment = group.kind === 'assignment';
+    const reference = group.kind === 'reprint_reference';
     if (!group.needsSelection && !(group.mode === 'split' && group.splitEligible) && !(assignment && group.assignEligible)) {
       const selected = group.selectedTrackingNumber || linked.find(item => group.itemIds.includes(item.id))?.trackingNumber || order.trackingNumbers[0] || '';
       container.append(element('strong', selected));
@@ -392,16 +400,31 @@ function trackingChoices(order, linked) {
     number.setAttribute('aria-label', `${order.recipient || group.internalId} 적용 송장`);
     number.add(new Option('송장 선택', ''));
     for (const candidate of group.candidates) {
-      const label = [candidate.trackingNumber, candidate.round ? `${candidate.round}차` : '', candidate.printedAt
+      const role = candidate.role === 'original' ? candidate.referenceOnly ? '원송장 (번호만 있음)' : '원송장'
+        : candidate.role === 'reprint' ? '재출력 송장' : '';
+      const label = [role, candidate.trackingNumber, candidate.round ? `${candidate.round}차` : '', candidate.printedAt
         ? /^\d{2}:\d{2}:\d{2}$/.test(candidate.printedAt) ? candidate.printedAt : formatTime(candidate.printedAt) : ''].filter(Boolean).join(' · ');
-      const option = new Option(label, candidate.trackingNumber); option.disabled = candidate.valid === false || candidate.selectable === false;
+      const option = new Option(label, candidate.trackingNumber);
+      option.disabled = reference ? !candidate.selectable : candidate.valid === false || candidate.selectable === false;
       number.add(option);
     }
     number.value = draft.trackingNumber;
-    number.disabled = assignment && group.assignEligible === false;
+    number.disabled = assignment && group.assignEligible === false || reference && !group.replaceEligible;
+    if (number.disabled) number.dataset.locked = 'true';
     number.addEventListener('change', () => saveTrackingDraft(group, { trackingNumber: number.value,
-      ...(assignment ? { mode: number.value ? 'assign' : '' } : {}) }));
+      ...(assignment ? { mode: number.value ? 'assign' : '' } : {}), ...(reference ? { acknowledgeOriginal: false } : {}) }));
     numberLabel.append(number); controls.append(numberLabel);
+    if (reference) {
+      if (group.candidates.some(candidate => candidate.trackingNumber === draft.trackingNumber && candidate.referenceOnly)) {
+        const label = element('label', undefined, 'tracking-reference-check');
+        const check = element('input'); check.type = 'checkbox'; check.checked = Boolean(draft.acknowledgeOriginal);
+        check.addEventListener('change', () => saveTrackingDraft(group, { acknowledgeOriginal: check.checked }));
+        label.append(check, element('span', '상자에 붙인 원송장을 확인했습니다.')); controls.append(label);
+      }
+      if (group.reason && group.needsSelection) controls.append(element('small', group.reason, 'match-reason'));
+      container.append(controls);
+      continue;
+    }
     if (assignment) {
       controls.append(element('small', '분리 배송'));
       if (group.reason && group.needsSelection) controls.append(element('small', group.reason, 'match-reason'));
@@ -626,6 +649,10 @@ async function saveReview() {
   const choices = [...trackingChanges.values()];
   if (choices.some(choice => !choice.trackingNumber || !['replace', 'split', 'assign'].includes(choice.mode))) {
     message('적용 송장과 교체·분할 상자 처리 방식을 모두 선택해 주세요.', true); return;
+  }
+  if (choices.some(choice => !choice.acknowledgeOriginal && current.trackingReview.groups.find(group => group.key === choice.key)
+    ?.candidates.some(candidate => candidate.trackingNumber === choice.trackingNumber && candidate.referenceOnly))) {
+    message('상자에 붙인 원송장을 확인한 뒤 저장해 주세요.', true); return;
   }
   const body = { changes: [...itemChanges.values()], issueResolutions: resolutions.filter(issue => issue.resolved).map(({ key, note }) => ({ key, note })) };
   let next = current, trackingSaved = false, reviewSaved = false;

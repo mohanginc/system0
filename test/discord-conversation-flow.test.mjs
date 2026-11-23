@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
+import * as XLSX from 'xlsx';
 import { createDiscordHandler } from '../lib/discord-bot.mjs';
 import { discordMessageAddressed } from '../lib/discord-config.mjs';
 import { courierFile, naverFile, sourceFile } from './fixtures/weekend-invoices.mjs';
@@ -25,7 +26,7 @@ const secondNumber = '04550000009';
 const followup = '재출력이야. 두 번째 송장으로 적용해줘';
 const json = (method, body) => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
 
-async function boot(t, { naver } = {}) {
+async function boot(t, { naver, extraOrders = [] } = {}) {
   const toolRequests = [], workerCalls = [];
   let nextTurn;
   const client = { responses: { create: async request => {
@@ -69,7 +70,7 @@ async function boot(t, { naver } = {}) {
   const formFile = (form, key, file) => form.append(key, new Blob([file.buffer]), file.name);
   const first = order(1), other = order(2);
   const source = new FormData();
-  formFile(source, 'files', sourceFile([first, other]));
+  formFile(source, 'files', sourceFile([first, other, ...extraOrders]));
   const imported = await request('/api/import', { method: 'POST', body: source }, 201);
   app.locals.db.prepare('UPDATE batches SET created_at = ? WHERE id = ?').run(`${date}T01:00:00.000Z`, imported.batch.id);
   const start = async product => {
@@ -83,6 +84,16 @@ async function boot(t, { naver } = {}) {
     assert.equal(view.trackingReview.groups.length, 1);
     assert.equal(view.trackingReview.groups[0].replaceEligible, true);
     return { view, product, second };
+  };
+  const startReprints = async products => {
+    const form = new FormData();
+    const reprints = products.map((product, i) => ({ ...product, trackingNumber: `0466000000${i}`, round: 1,
+      originalTrackingNumber: product.trackingNumber, issueCount: 2, printedAt: '15:15:10' }));
+    formFile(form, 'naverFiles', naverFile(products));
+    formFile(form, 'courierFiles', courierFile(reprints));
+    form.append('deliveryCompanyCode', 'KGB');
+    form.append('sourceDate', date);
+    return { view: await request('/api/invoices/import', { method: 'POST', body: form }, 201), reprints };
   };
   let eventId = 666666666666666660n;
   async function invoke(text, steps, { replyToId = null, userId = scope.userId, mentioned = true, channelId = scope.channelId } = {}) {
@@ -104,7 +115,7 @@ async function boot(t, { naver } = {}) {
   const setSavedTime = (messageId, time) => {
     assert.equal(app.locals.db.prepare('UPDATE discord_conversation_turns SET created_at = ? WHERE message_id = ?').run(time, messageId).changes, 1);
   };
-  return { first, other, start, invoke, get, webNote, setSavedTime, toolRequests, workerCalls };
+  return { first, other, start, startReprints, invoke, get, webNote, setSavedTime, toolRequests, workerCalls };
 }
 
 function suppliedConversation(transcript) {
@@ -452,4 +463,136 @@ test('직원이 고른 송장과 모델이 고른 송장이 다르거나 조회�
   }
   assert.ok(!s.workerCalls.some(call => /\/tracking$/.test(call.path)));
   assert.equal((await s.get(runId)).viewVersion, target.view.viewVersion);
+});
+
+const trackingWrites = calls => calls.filter(call => /\/tracking$/.test(call.path) && call.body.validateOnly !== true);
+
+async function showReprints(s, runId) {
+  return s.invoke(`송장 작업 #${runId}의 재출력 송장과 원송장을 보여줘`, [
+    ['review_invoice_tracking', { runId, bulkReplacement: false }],
+    result => {
+      assert.ok(result.trackingRows.every(row => row.originalTrackingNumber && row.reprintTrackingNumber));
+      return '원송장과 이번 파일의 송장입니다.';
+    },
+  ], plain);
+}
+
+test('보여준 재출력 네 건에서 원송장을 무시하는 말만으로 새 번호를 일괄 저장하고 엑셀을 받습니다', async t => {
+  const extraOrders = [order(3), order(4)];
+  const s = await boot(t, { extraOrders });
+  const orders = [s.first, s.other, ...extraOrders];
+  const { view, reprints } = await s.startReprints(orders), runId = view.run.id;
+  const preview = await showReprints(s, runId);
+  for (const [i, product] of orders.entries()) {
+    assert.ok(preview.output.content.includes(product.trackingNumber));
+    assert.ok(preview.output.content.includes(reprints[i].trackingNumber));
+  }
+  assert.equal(trackingWrites(s.workerCalls).length, 0);
+
+  const done = await s.invoke('그냥 원송장 번호 무시하고 송장번호로 적용해줘. 네이버 업로드용 엑셀도 만들어줘.', [
+    (_result, transcript) => {
+      assert.deepEqual(suppliedConversation(transcript).pending.trackingGroupKeys, view.trackingReview.groups.map(group => group.key));
+      return ['read_invoice', { runId }];
+    },
+    ['apply_invoice_tracking', { runId, selections: [], all: 'reprint' }],
+    result => { assert.equal(result.changed, 4); return ['get_invoice_file', { runId, mode: 'export' }]; },
+    result => { assert.equal(result.ok, true); return '이번 파일 송장 네 건을 저장하고 엑셀을 만들었습니다.'; },
+  ], { ...plain, userId: otherUser });
+  assert.match(done.output.content, /엑셀을 만들었습니다/);
+  assert.equal(trackingWrites(s.workerCalls).length, 1);
+  const saved = await s.get(runId);
+  assert.deepEqual(saved.items.map(item => [item.trackingNumber, item.decision]), reprints.map(parcel => [parcel.trackingNumber, 'include']));
+  const book = XLSX.read(done.output.files[0].attachment, { type: 'buffer' });
+  const excel = XLSX.utils.sheet_to_json(book.Sheets['발송처리'], { header: 1, raw: true }).slice(1);
+  assert.deepEqual(excel.map(row => [row[0], row[3]]), reprints.map(parcel => [parcel.productOrderId, parcel.trackingNumber]));
+});
+
+test('목록 번호로 선택한 원송장은 실물 라벨 확인이 필요하고 나머지 선택은 따로 저장합니다', async t => {
+  const s = await boot(t);
+  const { view, reprints } = await s.startReprints([s.first, s.other]), runId = view.run.id;
+  await showReprints(s, runId);
+  const earlier = await s.invoke('원송장으로 처리해줘', [
+    ['read_invoice', { runId }], ['apply_invoice_tracking', { runId, selections: [], all: 'original' }],
+    result => { assert.equal(result.changed, 0); assert.equal(result.blockedSelections.length, 2); return '실제 라벨을 확인해 주세요.'; },
+  ], plain);
+  assert.match(earlier.output.content, /실제 상자/);
+  assert.equal(trackingWrites(s.workerCalls).length, 0);
+
+  const mixed = await s.invoke('1번은 원송장, 2번은 새 송장으로 처리해줘', [
+    ['read_invoice', { runId }], ['apply_invoice_tracking', { runId, selections: [{ position: 1, role: 'original' }, { position: 2, role: 'reprint' }], all: null }],
+    result => {
+      assert.equal(result.changed, 1);
+      assert.deepEqual(result.blockedSelections[0].productOrderIds, [s.first.productOrderId]);
+      return '두 번째 건을 저장했습니다.';
+    },
+  ], plain);
+  assert.match(mixed.output.content, /완료/);
+  assert.match(mixed.output.content, /미완료/);
+  assert.equal((await s.get(runId)).items[1].trackingNumber, reprints[1].trackingNumber);
+
+  const original = await s.invoke('1번 실제 박스에 원송장 라벨이 붙어 있어. 1번을 원송장으로 처리해줘.', [
+    ['read_invoice', { runId }], ['apply_invoice_tracking', { runId, selections: [{ position: 1, role: 'original' }], all: null }],
+    result => { assert.equal(result.changed, 1); assert.equal(result.choices[0].acknowledgeOriginal, true); return '원송장을 적용했습니다.'; },
+  ], plain);
+  assert.match(original.output.content, /원송장을 적용/);
+  assert.deepEqual((await s.get(runId)).items.map(item => item.trackingNumber), [s.first.trackingNumber, reprints[1].trackingNumber]);
+  assert.equal(trackingWrites(s.workerCalls).length, 2);
+});
+
+test('조회 문장과 오래된 목록은 정정을 실행하지 않고 정확한 상품주문번호별 송장 선택은 한 번에 저장합니다', async t => {
+  const s = await boot(t);
+  const { view, reprints } = await s.startReprints([s.first, s.other]), runId = view.run.id;
+  const requests = reprints.map(parcel => ({ productOrderId: parcel.productOrderId, trackingNumber: parcel.trackingNumber, mode: 'replace' }));
+  const readOnly = await s.invoke(`${s.first.productOrderId} 주문의 송장 ${reprints[0].trackingNumber}이 맞는지 확인해줘`, [
+    ['read_invoice', { runId }], ['select_invoice_tracking', { runId, ...requests[0] }],
+    result => { assert.equal(result.ok, false); return '조회했습니다.'; },
+  ], plain);
+  assert.match(readOnly.output.content, /변경을 요청한 경우/);
+  assert.equal(trackingWrites(s.workerCalls).length, 0);
+
+  const preview = await showReprints(s, runId);
+  const changed = await s.webNote(view);
+  const stale = await s.invoke('이번 파일 송장으로 처리해줘', [
+    ['read_invoice', { runId }], ['apply_invoice_tracking', { runId, selections: [], all: 'reprint' }],
+  ], { ...plain, replyToId: preview.botMessageId });
+  assert.match(stale.output.content, /작업이 바뀌었습니다/);
+  assert.equal((await s.get(runId)).viewVersion, changed.viewVersion);
+  assert.equal(trackingWrites(s.workerCalls).length, 0);
+
+  const done = await s.invoke(requests.map(target => `상품주문번호 ${target.productOrderId}의 송장번호를 ${target.trackingNumber}로`).join(', ') + ' 교체해줘', [
+    ['read_invoice', { runId }], ['apply_invoice_tracking', { runId, selections: requests, all: null }],
+    result => { assert.equal(result.changed, 2); return '두 건의 송장을 저장했습니다.'; },
+  ], plain);
+  assert.match(done.output.content, /두 건의 송장을 저장/);
+  assert.equal(trackingWrites(s.workerCalls).length, 1);
+  assert.deepEqual((await s.get(runId)).items.map(item => item.trackingNumber), reprints.map(parcel => parcel.trackingNumber));
+});
+
+test('새 목록에서 곧바로 일괄 변경하지 않고 확인 후 현재 연결된 번호를 재출력 번호와 구분합니다', async t => {
+  const s = await boot(t);
+  const { view, reprints } = await s.startReprints([s.first, s.other]), runId = view.run.id;
+  const preview = await s.invoke(`송장 작업 #${runId} 이번 파일 송장으로 처리해줘`, [
+    ['read_invoice', { runId }], ['apply_invoice_tracking', { runId, selections: [], all: 'reprint' }],
+    result => { assert.equal(result.confirmationRequired, true); return '대상을 확인해 주세요.'; },
+  ], plain);
+  assert.match(preview.output.content, /아래 목록/);
+  assert.equal(trackingWrites(s.workerCalls).length, 0);
+
+  const first = await s.invoke('1번 상자에 붙인 원송장으로 적용해줘', [
+    ['read_invoice', { runId }], ['apply_invoice_tracking', { runId, selections: [{ position: 1, role: 'original' }], all: null }],
+    result => { assert.equal(result.changed, 1); return '첫 번째 원송장을 적용했습니다.'; },
+  ], plain);
+  assert.match(first.output.content, /첫 번째 원송장/);
+
+  const second = await s.invoke('현재 연결된 송장으로 처리해줘', [
+    ['read_invoice', { runId }], ['apply_invoice_tracking', { runId, selections: [], all: 'current' }],
+    result => {
+      assert.equal(result.changed, 1);
+      assert.equal(result.choices[0].trackingNumber, reprints[1].trackingNumber);
+      return '현재 연결된 송장을 적용했습니다.';
+    },
+  ], plain);
+  assert.match(second.output.content, /현재 연결된 송장을 적용/);
+  assert.deepEqual((await s.get(runId)).items.map(item => item.trackingNumber), [s.first.trackingNumber, reprints[1].trackingNumber]);
+  assert.equal(trackingWrites(s.workerCalls).length, 2);
 });

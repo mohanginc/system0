@@ -11,7 +11,7 @@ const event = { ...scope, id: '555555555555555555', action: 'create_invoice', da
   { name: 'courier.xlsx', url: 'https://cdn.discordapp.com/attachments/1/2/courier.xlsx', size: 4 },
 ] };
 const response = data => Response.json(data);
-function fixture({ laterOnly = false } = {}) {
+function fixture({ laterOnly = false, reference = false } = {}) {
   const calls = [], progress = [], jobs = new Map(); let revision = 1;
   const group = { key: 'group-one', internalId: '000001', orderId: '202611130000000099', recipient: '가상 수취인',
     itemIds: [1, 2], productOrderIds: ['202611130000000001', '202611130000000002'],
@@ -19,6 +19,12 @@ function fixture({ laterOnly = false } = {}) {
       { trackingNumber: '45500000002', round: 2, printedAt: '10:28:07' }],
     selectedTrackingNumber: '', mode: null, needsSelection: true,
     replacementEligible: laterOnly, replacementTrackingNumber: laterOnly ? '45500000002' : '' };
+  if (reference) {
+    Object.assign(group, { kind: 'reprint_reference', replaceEligible: true, splitEligible: false,
+      originalTrackingNumber: '45500000001', reprintTrackingNumber: '45500000002' });
+    Object.assign(group.candidates[0], { referenceOnly: true, valid: null, selectable: true });
+    Object.assign(group.candidates[1], { selectable: true });
+  }
   const view = () => ({ run: { id: 7, sourceDate: event.date, savedFileAvailable: false },
     viewVersion: String(revision).repeat(64), currentSummary: { total: 2, ready: group.needsSelection ? 0 : 2, attention: group.needsSelection ? 2 : 0 },
     fileActions: { create: !group.needsSelection, rebuild: false, saved: false, reviewRequired: group.needsSelection },
@@ -40,7 +46,8 @@ function fixture({ laterOnly = false } = {}) {
     if (route === '/api/invoices/check-date') return response({ runIds: [7], summary: { succeeded: 1 }, errors: [] });
     if (route === '/api/invoices/7/tracking') {
       assert.equal(body.expectedVersion, view().viewVersion);
-      assert.deepEqual(body.choices, [{ key: group.key, trackingNumber: '45500000002', mode: body.choices[0].mode }]);
+      assert.deepEqual(body.choices, [{ key: group.key, trackingNumber: reference ? '45500000001' : '45500000002', mode: body.choices[0].mode,
+        ...(reference ? { acknowledgeOriginal: true } : {}) }]);
       group.selectedTrackingNumber = body.choices[0].trackingNumber; group.mode = body.choices[0].mode;
       group.needsSelection = false; group.replacementEligible = false; revision++;
       return response(view());
@@ -101,6 +108,21 @@ test('일반 추가 업로드의 단일 현재 송장도 실제 분할일 수 �
   const menu = components(output).find(c => c.type === 3);
   assert.ok(menu, output.content);
   assert.ok(menu.options.some(option => option.value === 'split:45500000002'));
+});
+
+test('원송장 참조만 있어도 디스코드에서 두 번호 중 실제 라벨을 확인한 원송장을 적용한다', async () => {
+  const f = fixture({ reference: true }), handle = createDiscordHandler({ config, fetcher: f.fetcher });
+  const output = await handle(event);
+  assert.match(output.content, /이번 파일 45500000002 · 원송장 45500000001/);
+  const menu = components(output).find(component => component.type === 3);
+  assert.deepEqual(menu.options.map(option => option.value), ['original:45500000001', 'replace:45500000002']);
+  assert.match(menu.options[0].label, /라벨을 확인한 원송장/);
+  const selected = await handle({ ...scope, id: '555555555555555564', buttonId: menu.custom_id, values: ['original:45500000001'] });
+  assert.equal(f.group.selectedTrackingNumber, '45500000001');
+  const build = components(selected).find(component => component.label === '선택 완료 · 엑셀 만들기');
+  const result = await handle({ ...scope, id: '555555555555555565', buttonId: build.custom_id });
+  assert.equal(result.files[0].name, 'corrected.xlsx');
+  assert.equal(f.calls.find(call => call.route.endsWith('/file')).body.mode, 'export');
 });
 
 test('등록 조회와 명시 재생성도 실제 실행 전에 처리 방법을 알린다', async () => {
