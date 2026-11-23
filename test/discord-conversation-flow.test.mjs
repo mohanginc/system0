@@ -4,6 +4,7 @@ import path from 'node:path';
 import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import { createDiscordHandler } from '../lib/discord-bot.mjs';
+import { discordMessageAddressed } from '../lib/discord-config.mjs';
 import { courierFile, naverFile, sourceFile } from './fixtures/weekend-invoices.mjs';
 
 process.env.SYSTEM0_ENV_FILE = path.join(os.tmpdir(), 'absent-system0-' + randomUUID());
@@ -13,8 +14,10 @@ const { createApp } = await import('../server.mjs');
 const date = '2026-11-16';
 const scope = { guildId: '111111111111111111', channelId: '222222222222222222', userId: '333333333333333333' };
 const otherUser = '444444444444444444';
-const config = { secret: 'conversation-local-test-secret', guildId: scope.guildId, channelIds: [scope.channelId],
-  userIds: [scope.userId, otherUser], publicOrigin: 'https://system0.example' };
+const mentionChannel = '555555555555555555';
+const config = { secret: 'conversation-local-test-secret', guildId: scope.guildId, channelIds: [scope.channelId, mentionChannel],
+  plainMessageChannelIds: [scope.channelId], userIds: [scope.userId, otherUser], publicOrigin: 'https://system0.example' };
+const plain = { mentioned: false };
 const order = n => ({ productOrderId: '2026111600000000' + n, orderId: '2026111600000009' + n,
   internalId: '00000' + n, trackingNumber: '0455000000' + n, productName: '가상 제품 ' + n, optionName: String(n),
   recipient: '가상 수취인', phone: '010-0000-0000', address: '서울 가상 주소 101호', quantity: 1 });
@@ -78,7 +81,8 @@ async function boot(t) {
     return { view, product, second };
   };
   let eventId = 666666666666666660n;
-  async function invoke(text, steps, { replyToId = null, userId = scope.userId } = {}) {
+  async function invoke(text, steps, { replyToId = null, userId = scope.userId, mentioned = true } = {}) {
+    if (!discordMessageAddressed(config, { ...scope, userId, mentioned, replyToBot: Boolean(replyToId) })) return null;
     const botMessageId = String(eventId++);
     nextTurn = (outputs, transcript) => {
       const step = steps[outputs.length];
@@ -95,7 +99,7 @@ async function boot(t) {
   return { first, other, start, invoke, get, webNote, toolRequests, workerCalls };
 }
 
-function askForTracking(s, target, text) {
+function askForTracking(s, target, text, options) {
   return s.invoke(text, [
     ['review_invoice_tracking', { runId: target.view.run.id, bulkReplacement: false }],
     result => {
@@ -103,7 +107,7 @@ function askForTracking(s, target, text) {
       assert.equal(result.trackingGroups.length, 1);
       return `송장 작업 #${target.view.run.id}의 두 후보입니다. 첫 번째 ${target.product.trackingNumber}, 두 번째 ${target.second.trackingNumber}. 재출력인지 분리 배송인지 알려주세요.`;
     },
-  ]);
+  ], options);
 }
 
 function applySecond(s, target, replyToId, onRead) {
@@ -148,6 +152,95 @@ test('봇 답장으로 한 업무의 송장 후보를 이어받아 웹에 두 �
   assert.deepEqual(mutations.map(call => [call.body.validateOnly === true, call.status]), [[true, 200], [false, 200]]);
 });
 
+test('멘션 없는 일반 메시지는 지정 업무 채널의 허용 직원에게만 열고 기존 멘션과 답장을 유지합니다', () => {
+  const addressed = overrides => discordMessageAddressed(config, { ...scope, mentioned: false, replyToBot: false, ...overrides });
+  assert.equal(addressed({}), true);
+  assert.equal(addressed({ userId: otherUser }), true);
+  assert.equal(addressed({ userId: '777777777777777777', mentioned: true }), false);
+  assert.equal(addressed({ guildId: '777777777777777777' }), false);
+  assert.equal(addressed({ channelId: '777777777777777777', mentioned: true }), false);
+  assert.equal(addressed({ channelId: mentionChannel }), false);
+  assert.equal(addressed({ channelId: mentionChannel, mentioned: true }), true);
+  assert.equal(addressed({ channelId: mentionChannel, replyToBot: true }), true);
+});
+
+test('업무 채널의 일반 채팅으로 직원별 업무를 이어가고 새 출고 조회와 구분합니다', async t => {
+  const s = await boot(t), first = await s.start(s.first), second = await s.start(s.other);
+  const firstId = first.view.run.id, secondId = second.view.run.id;
+  const firstText = `송장 작업 #${firstId}에 중복 송장 후보를 알려줘`;
+  const secondText = `송장 작업 #${secondId}에 교체할 송장 후보를 알려줘`;
+  const shippingText = '오늘 양손프리 출고 수량 알려줘';
+  const secondViewBefore = await s.get(secondId);
+  const firstOutput = await askForTracking(s, first, firstText, plain);
+  assert.match(firstOutput.output.content, /재출력인지 분리 배송인지/);
+
+  const secondOutput = await s.invoke(secondText, [
+    (_result, transcript) => {
+      assert.ok(!transcript.includes(firstText));
+      assert.ok(!transcript.includes(first.second.trackingNumber));
+      return ['review_invoice_tracking', { runId: secondId, bulkReplacement: false }];
+    },
+    result => {
+      assert.equal(result.choiceToConfirm.runId, secondId);
+      return `두 번째 후보는 ${second.second.trackingNumber}입니다.`;
+    },
+  ], { ...plain, userId: otherUser });
+  assert.match(secondOutput.output.content, /두 번째 후보/);
+
+  const shipping = await s.invoke(shippingText, [
+    (_result, transcript) => {
+      assert.ok(!transcript.includes(firstText));
+      assert.ok(!transcript.includes(secondText));
+      return ['get_shipping_board', { date, batchId: null, search: '양손프리' }];
+    },
+    result => { assert.equal(result.ok, true); return `양손프리 ${result.matchingQuantity}묶음입니다.`; },
+  ], plain);
+  assert.match(shipping.output.content, /양손프리.*묶음/);
+
+  const replacement = await s.invoke('재출력이야. 두 번째 걸로 적용해줘', [
+    (_result, transcript) => {
+      assert.ok(transcript.includes(firstText));
+      assert.ok(transcript.includes(`두 번째 ${first.second.trackingNumber}`));
+      assert.ok(!transcript.includes(secondText));
+      assert.ok(!transcript.includes(second.second.trackingNumber));
+      assert.ok(!transcript.includes(shippingText));
+      return ['read_invoice', { runId: firstId }];
+    },
+    ['select_invoice_tracking', { runId: firstId, productOrderId: first.product.productOrderId,
+      trackingNumber: first.second.trackingNumber, mode: 'replace' }],
+    result => { assert.equal(result.ok, true); return '두 번째 송장으로 적용했습니다.'; },
+  ], plain);
+  assert.match(replacement.output.content, /두 번째 송장으로 적용했습니다/);
+  const current = await s.get(firstId);
+  assert.equal(current.items[0].trackingNumber, first.second.trackingNumber);
+  assert.equal(current.items[0].trackingSelection.mode, 'replace');
+  assert.equal((await s.get(secondId)).viewVersion, secondViewBefore.viewVersion);
+  const trackingCalls = s.workerCalls.filter(call => /\/tracking$/.test(call.path));
+  assert.deepEqual(trackingCalls.map(call => [call.path, call.body.validateOnly === true, call.status]),
+    [[`/api/invoices/${firstId}/tracking`, true, 200], [`/api/invoices/${firstId}/tracking`, false, 200]]);
+});
+
+test('일반 채팅의 후속 질문은 선택 대기 없이 조회하던 송장 작업을 찾습니다', async t => {
+  const s = await boot(t), target = await s.start(s.first), runId = target.view.run.id;
+  const firstText = `송장 작업 #${runId} 결과 확인해줘`;
+  const firstAnswer = '이 주문은 적용할 송장을 아직 선택하지 않았습니다.';
+  await s.invoke(firstText, [['read_invoice', { runId }], firstAnswer], plain);
+
+  const { output } = await s.invoke('그럼 왜 누락됐어?', [
+    (_result, transcript) => {
+      assert.ok(transcript.includes(firstText));
+      assert.ok(transcript.includes(firstAnswer));
+      return ['read_invoice', { runId }];
+    },
+    result => {
+      assert.equal(result.trackingGroups[0].candidates.length, 2);
+      return '송장 후보가 두 개라 선택이 필요합니다.';
+    },
+  ], plain);
+  assert.match(output.content, /송장 후보가 두 개라 선택이 필요합니다/);
+  assert.ok(!s.workerCalls.some(call => /\/tracking$/.test(call.path)));
+});
+
 test('다른 직원의 답장과 대상이 모호한 후속 요청은 이전 대화나 송장을 사용하지 않습니다', async t => {
   const s = await boot(t), first = await s.start(s.first), second = await s.start(s.other);
   const firstVersion = (await s.get(first.view.run.id)).viewVersion;
@@ -157,9 +250,9 @@ test('다른 직원의 답장과 대상이 모호한 후속 요청은 이전 대
   assert.match(crossStaff.output.content, /답장|작업번호|대화/);
   assert.equal(s.toolRequests.length, beforeOtherReply);
 
-  await askForTracking(s, second, `송장 작업 #${second.view.run.id}의 송장 후보를 보여줘`);
+  await askForTracking(s, second, `송장 작업 #${second.view.run.id}의 송장 후보를 보여줘`, plain);
   const beforeAmbiguousReply = s.toolRequests.length;
-  const ambiguous = await s.invoke(followup, []);
+  const ambiguous = await s.invoke(followup, [], plain);
   assert.match(ambiguous.output.content, /작업번호|어떤|대상|답장/);
   assert.equal(s.toolRequests.length, beforeAmbiguousReply);
   assert.ok(!s.workerCalls.some(call => /\/tracking$/.test(call.path)));

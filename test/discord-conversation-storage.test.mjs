@@ -50,11 +50,37 @@ test('작업번호와 상품주문번호로 대화를 찾고, 새 요청이나 �
   assert.equal(s.load('내일 출고 묶음 수를 알려줘').status, 'none');
   assert.equal(s.load('오늘 두 번째 출고 작업 수량을 알려줘').status, 'none');
   assert.equal(s.load('상품주문번호 2026111900000003의 두 번째 송장으로 해줘').status, 'none');
+  assert.equal(s.load('송장 작업 #24 상품주문번호 2026111900000003의 두 번째 송장으로 해줘').status, 'none');
   s.save(2, { pending: pending(24, '2026111900000002') });
   assert.equal(s.load('송장 작업 #24의 두 번째 송장').status, 'ambiguous');
   assert.equal(s.load('송장 작업 #24 상품주문번호 #2026111900000002의 두 번째 송장').conversationId, userMessage(2));
   assert.equal(s.load('2026111900000001에 무엇을 확인했지?').conversationId, userMessage(1));
   assert.equal(s.load('주문 작업 #24 상품명 정리해줘').status, 'none');
+});
+
+test('멘션 없는 후속 질문은 내 관련 대화를 찾고, 새 업무와 확인 대기 없는 송장 적용은 따로 처리합니다', t => {
+  const s = setup(t), employee = { ...scope, userId: '666666666666666666' };
+  const { conversationId } = s.save(1, { runIds: [24], userText: '어제 송장 검토 결과 조회해줘' });
+  s.save(2, { userText: '오늘 양손프리 출고 수량 알려줘' });
+  s.save(3, { ...employee, pending: pending(25, '2026111900000002') });
+  assert.equal(s.load('그럼 왜 누락됐어?').conversationId, conversationId);
+  assert.equal(s.load('그 결과에서 왜 차이가 나?').conversationId, userMessage(2));
+  assert.equal(s.load('아까 말한 송장으로 적용해 줘').status, 'none');
+  assert.equal(s.load('재출력이야. 두 번째 걸로 적용해줘').status, 'none');
+
+  s.save(4, { conversationId, pending: pending(24, '2026111900000001') });
+  assert.equal(s.load('두 번째 번호가 뭐였지?').conversationId, conversationId);
+  assert.equal(s.load('재출력이야. 두 번째 걸로 적용해줘').conversationId, conversationId);
+  assert.equal(s.load('오늘 양손프리 출고 수량 알려줘').status, 'none');
+  assert.equal(s.load('그럼 오늘 양손프리 출고 수량 알려줘').status, 'none');
+  s.save(5, { runIds: [22], pending: pending(26, '2026111900000003') });
+  assert.deepEqual(s.load('두 번째 걸로 적용해줘'), { status: 'ambiguous', conversationId: null, turns: [], pending: null, runIds: [26, 24] });
+  assert.equal(s.load('두 번째 걸로 적용해줘', null, employee).conversationId, userMessage(3));
+
+  s.save(6, { userText: '오늘 양손프리 출고 수량 알려줘' });
+  assert.equal(s.load('그럼 몇 묶음이야?').conversationId, userMessage(6));
+  assert.equal(s.load('그럼 왜 누락됐어?').conversationId, userMessage(5));
+  assert.equal(s.load('두 번째 번호가 뭐였지?').status, 'ambiguous');
 });
 
 test('3일을 넘긴 메시지는 대화에 다시 들어오지 않고 남은 최근 5턴만 반환합니다', t => {

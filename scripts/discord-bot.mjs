@@ -3,7 +3,7 @@ import { loadEnvFile } from 'node:process';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client, Events, GatewayIntentBits, MessageFlags, MessageType, SlashCommandBuilder } from 'discord.js';
-import { readDiscordConfig, discordScopeAllowed, discordEnvPath } from '../lib/discord-config.mjs';
+import { readDiscordConfig, discordScopeAllowed, discordMessageAddressed, discordEnvPath } from '../lib/discord-config.mjs';
 import { createDiscordHandler, discordAttachment } from '../lib/discord-bot.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -11,7 +11,9 @@ for (const file of [process.env.SYSTEM0_ENV_FILE || path.join(root, '.env'), dis
   if (existsSync(file)) loadEnvFile(file);
 }
 const config = readDiscordConfig(process.env, { worker: true });
-const client = new Client({ intents: [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages] });
+const intents = [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages];
+if (config.plainMessageChannelIds.length) intents.push(GatewayIntentBits.MessageContent);
+const client = new Client({ intents });
 const handle = createDiscordHandler({ config });
 const allowedMentions = { parse: [], repliedUser: false };
 const commands = [
@@ -31,33 +33,40 @@ client.once(Events.ClientReady, async ready => {
     const guild = await ready.guilds.fetch(config.guildId);
     await guild.commands.set(commands.map(command => command.toJSON()));
     console.log('system0 디스코드 봇 연결 완료. 지정된 서버·채널·직원만 사용합니다.');
+    if (config.plainMessageChannelIds.length) console.log('system0 디스코드 업무 채널 일반 메시지 처리 활성화.');
   } catch {
     console.error('디스코드 명령을 등록하지 못했습니다. 서버 초대와 봇 권한을 확인해 주세요.');
     client.destroy(); process.exitCode = 1;
   }
 });
 client.on(Events.MessageCreate, async message => {
-  if (message.author.bot || !discordScopeAllowed(config, scope(message))) return;
+  const actor = scope(message);
+  if (message.author.bot || !discordScopeAllowed(config, actor)) return;
   let pending;
   try {
     const tagged = message.mentions.users.has(client.user.id);
     const ref = message.type === MessageType.Reply && message.reference;
     const replyToId = ref && ref.channelId === message.channelId && (!ref.guildId || ref.guildId === message.guildId) ? ref.messageId : null;
-    if (!tagged) {
-      if (!replyToId) return;
+    let replyToBot = false;
+    if (replyToId && !tagged) {
       const replyAuthor = message.mentions.repliedUser || (await message.fetchReference().catch(() => null))?.author;
-      if (replyAuthor?.id !== client.user.id) return;
+      replyToBot = replyAuthor?.id === client.user.id;
+      if (!replyToBot) return;
     }
+    if (!discordMessageAddressed(config, { ...actor, mentioned: tagged, replyToBot })) return;
     if (replyToId && !message.content) {
       await message.reply({ content: '답장 본문을 읽으려면 같은 메시지에 @system0을 멘션해 주세요.', allowedMentions });
       return;
     }
+    const text = message.content.replace(new RegExp(`<@!?${client.user.id}>`, 'g'), '').trim();
+    const attachments = [...message.attachments.values()].map(discordAttachment);
+    if (!text) {
+      if (attachments.length) await message.reply({ content: '첨부한 파일로 무엇을 할지 함께 적어 주세요.', allowedMentions });
+      return;
+    }
     pending = await message.reply({ content: '처리 중…', allowedMentions });
     let delivered = false;
-    const output = await handle({ id: message.id, kind: 'message', ...scope(message),
-      botMessageId: pending.id, replyToId,
-      text: message.content.replace(new RegExp(`<@!?${client.user.id}>`, 'g'), '').trim(),
-      attachments: [...message.attachments.values()].map(discordAttachment) },
+    const output = await handle({ id: message.id, kind: 'message', ...actor, botMessageId: pending.id, replyToId, text, attachments },
     { onProgress: content => pending.edit({ content, allowedMentions }), onResult: async result => {
       await pending.edit({ ...result, allowedMentions });
       delivered = true;
