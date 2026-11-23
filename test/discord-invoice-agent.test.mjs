@@ -105,7 +105,9 @@ async function boot(t, originalOrders, remoteOrders = originalOrders) {
   const check = () => request('/api/invoices/check-date', json('POST', { date }));
   const setGeneratedAt = (runId, time) => app.locals.db.prepare('UPDATE invoice_runs SET generated_at = ? WHERE id = ?')
     .run(date + 'T' + time + ':00.000Z', runId);
-  return { event, run, start, get, file, select, save, check, setGeneratedAt, webCalls, naverCalls, toolRequests };
+  const setCreatedAt = (runId, time) => app.locals.db.prepare('UPDATE invoice_runs SET created_at = ? WHERE id = ?')
+    .run(date + 'T' + time + ':00.000Z', runId);
+  return { event, run, start, get, file, select, save, check, setGeneratedAt, setCreatedAt, webCalls, naverCalls, toolRequests };
 }
 
 test('상품주문번호로 찾은 분리 배송 건을 비교·정정·재조회하면 웹에도 같은 상품만 변경됩니다', async t => {
@@ -172,9 +174,11 @@ test('네이버 발송 대상 밖의 같은 출고 건은 저장 주문과 로�
   assert.deepEqual(s.naverCalls.flat(), [naverOrder.productOrderId]);
 });
 
-test('네이버 조회 응답의 송장 작업번호만 확인한 system0 작업 링크로 표시합니다', async t => {
+test('조회와 대화에서 확인한 송장 작업은 날짜 링크로 표시하고 임의 작업번호는 가립니다', async t => {
   const a = order(1), s = await boot(t, [a]);
   const before = await s.start([a]), runId = before.run.id;
+  s.setCreatedAt(runId, '00:52');
+  await s.file(await s.get(runId), 'export');
   const output = await s.run(`${date} 네이버 송장 등록 상태를 알려줘`, [
     tool('check_invoice_registration', { date }),
     result => {
@@ -184,10 +188,15 @@ test('네이버 조회 응답의 송장 작업번호만 확인한 system0 작업
         + `주문 작업 #${runId}와 확인되지 않은 송장 작업 #99999는 참조 번호입니다.`;
     },
   ]);
-  const workLink = `송장 작업 [#${runId}](https://system0.example/invoices.html?run=${runId})`;
+  const workLink = `[11월 16일 오전 송장 작업](https://system0.example/invoices.html?run=${runId})`;
   assert.ok(output.content.includes(`${workLink}에서 등록을 확인했습니다.`), output.content);
   assert.ok(output.content.includes(`${workLink}의 내역과 ${workLink}의 번호입니다.`), output.content);
-  assert.ok(output.content.includes(`주문 작업 #${runId}와 확인되지 않은 송장 작업 #99999`), output.content);
+  assert.ok(output.content.includes(`주문 작업 #${runId}와 확인되지 않은 송장 작업은`), output.content);
+  assert.doesNotMatch(output.content, /#99999/);
+  await s.run('보관 엑셀을 다시 보내줘', [tool('read_invoice', { runId }), tool('get_invoice_file', { runId, mode: 'saved' }), '보관 엑셀입니다.']);
+  const recommendation = await s.run('오늘 할 일 추천해줘', [`송장 작업 #${runId}의 등록 상태를 확인해 주세요.`]);
+  assert.ok(recommendation.content.includes(workLink), recommendation.content);
+  assert.doesNotMatch(recommendation.content, /#\d+/);
 });
 
 test('누락을 확인해 보류·제외 사유를 저장하고 남은 주문만 웹과 같은 업로드 엑셀에 담습니다', async t => {
@@ -236,6 +245,9 @@ test('날짜에서 두 작업을 찾고 오전 보관본과 오후 최신 매칭
   const webRebuilt = await s.file(changed, 'rebuild');
   s.setGeneratedAt(first.run.id, '01:00');
   s.setGeneratedAt(second.run.id, '06:00');
+  s.setCreatedAt(first.run.id, '00:52');
+  s.setCreatedAt(second.run.id, '05:09');
+  const progress = [];
   const output = await s.run(date + ' 오전 작업은 보관본으로, 오후 작업은 현재 값으로 다시 만들어줘', [
     tool('list_invoice_runs', { date }),
     result => {
@@ -251,8 +263,15 @@ test('날짜에서 두 작업을 찾고 오전 보관본과 오후 최신 매칭
     },
     result => { assert.equal(item(result, b).trackingNumber, changedNumber); return tool('get_invoice_file', { runId: second.run.id, mode: 'rebuild' }); },
     result => { assert.equal(result.ok, true); return '선택한 두 파일입니다.'; },
-  ]);
+  ], undefined, message => progress.push(message));
   assert.equal(output.files?.length, 2, output.content);
+  for (const [run, time] of [[first, '오전 9:52'], [second, '오후 2:09']]) {
+    const link = `[11월 16일 ${time} 송장 작업](https://system0.example/invoices.html?run=${run.run.id})`;
+    assert.ok(output.content.includes(link), output.content);
+    assert.ok(progress.some(message => message.includes(link)));
+  }
+  assert.doesNotMatch([...progress, output.content].join('\n'), /#\d+/);
+  assert.deepEqual(output.files.map(file => file.name), ['네이버_발송처리_2026-11-16_0952.xlsx', '네이버_발송처리_2026-11-16_1409_현재매칭재생성.xlsx']);
   assert.deepEqual(output.files[0].attachment, savedFirst);
   assert.deepEqual(rows(output.files[1].attachment), rows(webRebuilt));
   assert.deepEqual(rows(output.files[1].attachment), [[b.productOrderId, changedNumber]]);
@@ -357,7 +376,7 @@ test('보류 저장 뒤 엑셀 사전 확인이 막히면 완료한 저장과 �
   assert.match(output.content, /\*\*완료\*\*\n- 검토 저장/);
   assert.match(output.content, /\*\*미완료\*\*/);
   assert.ok(output.content.includes(before.fileActions.reason), output.content);
-  assert.ok(output.content.includes(`[웹에서 작업 열기](https://system0.example/invoices.html?run=${runId})`), output.content);
+  assert.match(output.content, new RegExp(`\\[11월 16일 (?:오전 |오후 )?송장 작업\\]\\(https://system0\\.example/invoices\\.html\\?run=${runId}\\)`));
   assert.doesNotMatch(output.content, /모든 작업과 엑셀 생성이 끝났습니다/);
   assert.equal(output.files?.length ?? 0, 0);
   assert.ok(!s.webCalls.some(call => call.method === 'POST' && call.route === invoicePath(runId) + '/file'));
@@ -376,7 +395,7 @@ test('웹에서만 할 수 있는 원본 위치 열기는 확인한 작업의 �
     () => '원본 위치는 웹에서 확인할 수 있습니다.',
   ]);
   assert.match(output.content, /원본.*위치/);
-  assert.ok(output.content.includes(`[웹에서 작업 열기](https://system0.example/invoices.html?run=${runId})`), output.content);
+  assert.match(output.content, new RegExp(`\\[11월 16일 (?:오전 |오후 )?송장 작업\\]\\(https://system0\\.example/invoices\\.html\\?run=${runId}\\)`));
   assert.ok(!s.webCalls.some(call => call.route.startsWith(invoicePath(runId) + '/') && call.method !== 'GET'));
   assert.equal((await s.get(runId)).viewVersion, before.viewVersion);
 });

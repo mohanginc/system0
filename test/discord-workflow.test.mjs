@@ -75,6 +75,39 @@ test('Discord 비설정은 404, 비밀키·서버·채널·직원과 공개 Host
   assert.equal((await request(contextRoute())).headers.get('cache-control'), 'no-store');
 });
 
+test('송장 링크는 요청한 기본 스토어 작업만 한국 날짜와 같은 날짜의 작업 수로 반환한다', async t => {
+  const { db, request } = await boot(t);
+  const add = db.prepare(`INSERT INTO invoice_runs
+    (id, mall, store, carrier_name, carrier_code, fingerprint, legacy_signature, created_at, scope_json)
+    VALUES (?, ?, ?, '로젠택배', 'KGB', ?, 'fixture', ?, ?)`);
+  const sourceDate = '2026-11-23', scoped = JSON.stringify({ sourceDate });
+  add.run(1, 'naver', 'default', 'invoice-one', '2026-11-24T01:00:00Z', scoped);
+  add.run(2, 'naver', 'default', 'invoice-two', '2026-11-22T15:30:00Z', null);
+  add.run(3, 'naver', 'default', 'invoice-three', '2026-11-22T15:30:12Z', scoped);
+  add.run(4, 'naver', 'second-store', 'invoice-four', '2026-11-23T02:00:00Z', scoped);
+  add.run(5, 'other-mall', 'default', 'invoice-five', '2026-11-23T02:00:00Z', scoped);
+  add.run(6, 'naver', 'default', 'invoice-six', '2026-11-23T15:00:00Z', '{"sourceDate":""}');
+  claimDiscordRequest(db, { ...scope, requestId, action: 'invoice_agent', runId: 6, date: '2026-11-24' });
+  finishDiscordRequest(db, requestId, { ...scope, status: 'succeeded' });
+  const metadata = (value, userId) => contextRoute(userId) + '&' + new URLSearchParams({ invoiceIds: value });
+  const result = await request(metadata('[6,3,2,1,2,4,5,98]'));
+  assert.equal(result.status, 200);
+  assert.deepEqual(await result.json(), { runId: 6, date: '2026-11-24', invoiceRuns: [
+    { id: 1, sourceDate, createdAt: '2026-11-24T01:00:00Z', sameDayCount: 3, sameMinuteOrder: null },
+    { id: 2, sourceDate, createdAt: '2026-11-22T15:30:00Z', sameDayCount: 3, sameMinuteOrder: 1 },
+    { id: 3, sourceDate, createdAt: '2026-11-22T15:30:12Z', sameDayCount: 3, sameMinuteOrder: 2 },
+    { id: 6, sourceDate: '2026-11-24', createdAt: '2026-11-23T15:00:00Z', sameDayCount: 1, sameMinuteOrder: null },
+  ] });
+  assert.deepEqual(await (await request(metadata('[]'))).json(), { runId: 6, date: '2026-11-24', invoiceRuns: [] });
+  assert.deepEqual(await (await request(contextRoute())).json(), { runId: 6, date: '2026-11-24' });
+  for (const value of ['[', '1', '[0]', '["2"]', '[9007199254740992]', JSON.stringify(Array(51).fill(1))]) {
+    const invalid = await request(metadata(value));
+    assert.equal(invalid.status, 400);
+    assert.equal((await invalid.json()).code, 'discord_invalid_invoice_ids');
+  }
+  assert.equal((await request(metadata('[1]', '999999999999999999'))).status, 403);
+});
+
 test('동일 이벤트 claim/결과는 멱등이고 payload·다른 직원의 완료 변경을 거부한다', async t => {
   const { db, request } = await boot(t); importFiles(db, [legacy()]);
   const invoice = await imported(request), body = { ...scope, requestId, action: 'create_invoice', date };

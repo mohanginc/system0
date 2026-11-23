@@ -425,7 +425,8 @@ test('멘션 채널은 기존 직원별 답장을 유지하고 업무 채널은 
   await askForTracking(s, second, `송장 작업 #${second.view.run.id}의 송장 후보를 보여줘`, { ...plain, userId: otherUser });
   const beforeAmbiguousReply = s.toolRequests.length;
   const ambiguous = await s.invoke(followup, [], plain);
-  assert.match(ambiguous.output.content, /작업번호|어떤|대상|답장/);
+  assert.match(ambiguous.output.content, /상품주문번호|어떤|대상|답장/);
+  assert.doesNotMatch(ambiguous.output.content, /#\d+/);
   assert.equal(s.toolRequests.length, beforeAmbiguousReply);
   assert.ok(!s.workerCalls.some(call => /\/tracking$/.test(call.path)));
   assert.equal((await s.get(first.view.run.id)).viewVersion, firstVersion);
