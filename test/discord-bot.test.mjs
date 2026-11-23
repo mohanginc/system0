@@ -2,6 +2,8 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { createDiscordHandler, discordAttachment, discordButtonId, parseDiscordButton, readDiscordBytes } from '../lib/discord-bot.mjs';
 import { readDiscordConfig } from '../lib/discord-config.mjs';
+import { createDiscordTrace } from '../lib/discord-trace.mjs';
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -94,6 +96,48 @@ test('파일 첨부 요청은 기존 매칭·파일 API를 사용하고 내부 �
   assert.equal(Object.hasOwn(interpret, 'attachments'), false); assert.equal(Object.hasOwn(interpret, 'naverPassword'), false);
   assert.equal(JSON.stringify(output).includes(config.naverPassword), false);
   assert.equal(mock.calls.some(call => /\/export|\/items|\/check-date/.test(call.route)), false);
+});
+
+test('송장 요청의 첨부·업무 API·최종 답변을 같은 ID로 보관하고 암호와 엑셀 원문은 남기지 않는다', async t => {
+  const directory = mkdtempSync(path.join(os.tmpdir(), 'system0-discord-request-log-'));
+  t.after(() => rmSync(directory, { recursive: true, force: true }));
+  const trace = createDiscordTrace({ directory, secrets: [config.secret, config.naverPassword] });
+  for (const [id, fileStatus] of [[event.id, 200], ['555555555555555556', 409]]) {
+    const mock = fakeServer({ fileStatus });
+    const fetcher = async (url, options) => {
+      const result = await mock.fetcher(url, options);
+      return url.endsWith('/api/invoices/import') ? response({ ...detail, items: [{ recipient: 'private-customer-marker' }] }) : result;
+    };
+    await createDiscordHandler({ config, fetcher, trace })({ ...event, id, kind: 'message',
+      text: '네이버주문파일 비밀번호는 8462이야. 네이버 입력용 파일 만들어줘.' });
+  }
+
+  const raw = readdirSync(directory).map(file => readFileSync(path.join(directory, file), 'utf8')).join('');
+  for (const secret of ['8462', config.secret, config.naverPassword, 'private-customer-marker', 'cdn.discordapp.com', 'ex=example']) {
+    assert.equal(raw.includes(secret), false);
+  }
+  const events = raw.trim().split('\n').map(JSON.parse);
+  const success = events.filter(row => row.requestId === event.id);
+  assert.match(success.find(row => row.stage === 'request.start').text, /비밀번호는 \[가림\]/);
+  assert.deepEqual(success.filter(row => row.stage === 'attachment.result').map(row => [row.name, row.sizeBytes, row.status]),
+    [['naver.xlsx', 4, 200], ['courier.xls', 4, 200]]);
+  const matched = success.find(row => row.stage === 'api.result' && row.endpoint === '/api/invoices/import');
+  assert.equal(matched.result.runId, 7);
+  assert.equal(matched.result.counts.ready, 2);
+  assert.equal(success.find(row => row.stage === 'api.start' && row.endpoint === '/api/invoices/import').parameters.naverDecryptionConfigured, true);
+  const output = success.find(row => row.stage === 'request.result');
+  assert.match(output.text, /네이버 업로드용 파일/);
+  assert.deepEqual(output.files, [{ name: 'result.xlsx', sizeBytes: 4 }]);
+  const failure = events.find(row => row.requestId !== event.id && row.stage === 'api.result' && row.endpoint === '/api/invoices/7/file');
+  assert.equal(failure.status, 409);
+  assert.equal(failure.outcome, 'error');
+  assert.match(failure.error, /검토 내용을 먼저/);
+});
+
+test('진단 로그 콜백이 실패해도 송장 파일을 반환한다', async () => {
+  const mock = fakeServer();
+  const output = await createDiscordHandler({ config, fetcher: mock.fetcher, trace: () => { throw new Error('sink unavailable'); } })(event);
+  assert.equal(output.files[0].name, 'result.xlsx');
 });
 
 test('같은 디스코드 이벤트 재수신은 파일을 다시 업로드·생성하지 않는다', async () => {

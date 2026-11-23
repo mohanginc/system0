@@ -24,6 +24,15 @@ function setup(t) {
   return { db, save, load };
 }
 
+test('대화 기록에서도 메시지에 적은 엑셀 암호를 가린다', t => {
+  const s = setup(t);
+  s.save(1, { userText: '네이버주문파일 비밀번호는 8395이야. 송장 작업 #28 파일 만들어줘.' });
+  const stored = s.db.prepare('SELECT user_text FROM discord_conversation_turns WHERE message_id = ?').get(userMessage(1));
+  assert.match(stored.user_text, /비밀번호는 \[가림\]/);
+  assert.match(stored.user_text, /송장 작업 #28/);
+  assert.equal(stored.user_text.includes('8395'), false);
+});
+
 test('답장을 가리킨 사람의 대화만 읽고, 같은 대화에서도 답장한 후보가 바뀌면 다시 적용할 수 없습니다', t => {
   const s = setup(t), first = pending(24, '2026111900000001'), newer = { ...first, viewVersion: '3'.repeat(64) };
   const { conversationId } = s.save(1, { pending: first });

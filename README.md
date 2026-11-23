@@ -21,6 +21,12 @@
 
 Discord의 [봇 시작 안내](https://docs.discord.com/developers/quick-start/getting-started)와 [앱 설치 안내](https://docs.discord.com/developers/resources/application)를 참고합니다.
 
+### 봇 진단 로그
+
+`requestId`로 디스코드 수신·미처리 사유, 첨부 다운로드, 업무 API와 도구 실행 결과, 답변 및 전달 여부를 연결합니다. 한국 시간 기준 날짜별 JSONL 파일을 30일 보관합니다. 운영 경로는 `/var/lib/system0-discord/discord-trace/`, Windows 경로는 `%LOCALAPPDATA%/system0/discord-trace/`입니다. 운영에서는 `scripts/system0-discord.service`를 설치하고 `systemctl daemon-reload` 후 봇을 시작해야 전용 디렉터리가 열립니다.
+
+엑셀 암호, 토큰, 인증 헤더, 첨부 링크와 파일 내용은 진단 로그에 남기지 않습니다. 파일은 이름·크기와 처리 결과로 확인합니다.
+
 ## 운영 컴퓨터 설치
 
 Windows 10·11의 64비트 환경에서 `outputs/installer/system0-setup-0.1.4.exe` 하나를 옮겨 실행합니다. Node.js와 라이브러리가 포함되어 있으며 관리자 권한은 필요하지 않습니다. 최초 설치 화면에서 API 키를 입력하고, 바탕화면 **system0 주문 상품명 정리**를 실행합니다. 브라우저가 자동으로 열리며 서버 종료는 실행 창에서 `Ctrl+C`입니다.
