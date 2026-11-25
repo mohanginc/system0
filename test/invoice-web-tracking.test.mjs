@@ -100,7 +100,7 @@ test('추가 엑셀에 지정한 주문만 넘기고 전체 엑셀은 독립된 
       skipped: body.mode === 'all' ? [{ productOrderId: 'product-1', code: 'pending', reason: '보류' }] : [] };
   };
   h.run("openAdditionalExport('pending');");
-  childrenWith(h.nodes.get('invoice-action-fields'), 'input')[1].checked = true;
+  childrenWith(h.nodes.get('invoice-action-fields'), 'input').filter(input => input.type === 'checkbox')[1].checked = true;
   await submit(h); await submit(h);
   assert.deepEqual(h.calls, [true, false].map(validateOnly => ({ url: '/api/invoices/8/additional-files', body: {
     expectedVersion: 'version-1', mode: 'pending', productOrderIds: ['product-2'], validateOnly } })));
@@ -109,6 +109,30 @@ test('추가 엑셀에 지정한 주문만 넘기고 전체 엑셀은 독립된 
   h.run("openAdditionalExport('all');"); await submit(h);
   assert.deepEqual(h.calls[2].body, { expectedVersion: 'version-1', mode: 'all', productOrderIds: null, validateOnly: true });
   assert.match(childrenWith(h.nodes.get('invoice-action-preview'), 'li')[1].textContent, /product-1.*\n보류/);
+});
+
+test('주문 목록에서 검색한 수취인의 상품주문만 추가 엑셀 대상으로 선택한다', async () => {
+  const initial = detail({
+    items: [1, 2, 3].map(id => ({ id, productOrderId: `product-${id}`, productName: `상품 ${id}`, recipient: '원본 수취인' })),
+    currentOrders: [{ itemIds: [1, 2], recipient: '모의 박수취인' }, { itemIds: [3], recipient: '모의 김수취인' }],
+  });
+  const h = harness(initial);
+  h.context.mockApi = async (url, options) => {
+    const body = JSON.parse(options.body); h.calls.push({ url, body });
+    return { viewVersion: initial.viewVersion, file: null, included: [], skipped: [] };
+  };
+  h.run("$('search').value = '박수취인'; refreshControls(); openAdditionalExport('pending');");
+  assert.equal(h.nodes.get('pending-export-button').hidden, false);
+  const fields = h.nodes.get('invoice-action-fields');
+  const search = childrenWith(fields, 'input').find(input => input.type === 'search');
+  assert.equal(search.value, '박수취인');
+  const labels = childrenWith(fields, 'label');
+  assert.deepEqual(labels.map(label => label.hidden), [false, false, true]);
+  childrenWith(labels[2], 'input')[0].checked = true;
+  const select = childrenWith(fields, 'button').find(button => button.textContent === '검색 결과만 선택');
+  select.listeners.get('click')();
+  await submit(h);
+  assert.deepEqual(h.calls[0].body.productOrderIds, ['product-1', 'product-2']);
 });
 
 test('화면의 송장 선택은 교체·분할 모드를 구분해 새 업무 API로 저장한다', async () => {

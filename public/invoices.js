@@ -66,7 +66,7 @@ function refreshControls() {
   const replacements = replacementChoices();
   $('replace-tracking-button').hidden = !replacements.length;
   $('replace-tracking-button').disabled = busy || dirty || !replacements.length;
-  $('additional-export').hidden = !current || scopeUnavailable() || current.rematchRequired || !current.items.length;
+  $('pending-export-button').hidden = $('additional-export').hidden = !current || scopeUnavailable() || current.rematchRequired || !current.items.length;
   $('pending-export-button').disabled = $('full-export-button').disabled = busy || dirty;
   for (const button of document.querySelectorAll('.manual-tracking-button')) button.disabled = busy || dirty;
   $('dirty-note').textContent = dirty ? '검토 내용이 변경되었습니다. 저장해 주세요.' : '';
@@ -901,15 +901,37 @@ function openAdditionalExport(mode) {
   const entries = [];
   if (completeFile) fields.append(element('p', '등록 확인을 마친 주문도 포함합니다.'));
   else {
-    fields.append(element('p', '추가 파일에 넣을 상품주문을 선택하세요. 네이버에서 미등록을 확인한 주문만 포함합니다.'));
+    const toolbar = element('div', undefined, 'invoice-export-search'), search = element('input');
+    search.type = 'search'; search.placeholder = '수취인·상품주문번호 검색';
+    search.setAttribute('aria-label', '엑셀에 넣을 주문 검색'); search.value = $('search').value;
+    const selectResults = element('button', '검색 결과만 선택'), selectedCount = element('span');
+    selectResults.type = 'button'; selectedCount.setAttribute('role', 'status');
+    toolbar.append(search, selectResults, selectedCount); fields.append(toolbar);
+    const empty = element('p', '검색 결과가 없습니다.'); fields.append(empty);
+    const updateCount = () => { selectedCount.textContent = `${count(entries.filter(entry => entry.checkbox.checked).length)}건 선택`; };
     for (const item of items) {
       const label = element('label', undefined, 'invoice-export-target'), checkbox = element('input'); checkbox.type = 'checkbox';
       const recipient = (current.currentOrders || current.orders).find(order => order.itemIds.includes(item.id))?.recipient || item.recipient;
+      const keywords = [recipient, item.productOrderId, item.orderId, item.trackingNumber, item.productName, item.optionName].join(' ').toLocaleLowerCase();
       label.append(checkbox, element('span', [recipient, productActionLabel(item)].filter(Boolean).join(' · ')));
-      fields.append(label); entries.push({ productOrderId: item.productOrderId, checkbox });
+      checkbox.addEventListener('change', updateCount);
+      fields.append(label); entries.push({ productOrderId: item.productOrderId, checkbox, label, keywords });
     }
+    const filter = () => {
+      const query = search.value.trim().toLocaleLowerCase();
+      for (const entry of entries) entry.label.hidden = !entry.keywords.includes(query);
+      const hasResults = entries.some(entry => !entry.label.hidden);
+      empty.hidden = hasResults;
+      selectResults.hidden = !query || !hasResults;
+    };
+    search.addEventListener('input', filter);
+    selectResults.addEventListener('click', () => {
+      for (const entry of entries) entry.checkbox.checked = !entry.label.hidden;
+      updateCount();
+    });
+    filter(); updateCount();
   }
-  invoiceActionDialog({ title: completeFile ? '현재 매칭 전체 엑셀' : '지정 주문 미등록 엑셀', fields, path: 'additional-files',
+  invoiceActionDialog({ title: completeFile ? '현재 매칭 전체 엑셀' : '선택 주문 미등록 엑셀', fields, path: 'additional-files',
     getBody() {
       const productOrderIds = completeFile ? null : entries.filter(entry => entry.checkbox.checked).map(entry => entry.productOrderId);
       if (!completeFile && !productOrderIds.length) throw new Error('엑셀에 넣을 상품주문을 하나 이상 선택해 주세요.');
