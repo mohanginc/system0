@@ -66,9 +66,12 @@ function refreshControls() {
   const replacements = replacementChoices();
   $('replace-tracking-button').hidden = !replacements.length;
   $('replace-tracking-button').disabled = busy || dirty || !replacements.length;
+  $('additional-export').hidden = !current || scopeUnavailable() || current.rematchRequired || !current.items.length;
+  $('pending-export-button').disabled = $('full-export-button').disabled = busy || dirty;
+  for (const button of document.querySelectorAll('.manual-tracking-button')) button.disabled = busy || dirty;
   $('dirty-note').textContent = dirty ? '검토 내용이 변경되었습니다. 저장해 주세요.' : '';
   if (current) {
-    const generated = Boolean(current.run.generatedAt);
+    const generated = Boolean(current.run.generatedAt || current.run.fileCreatedAt);
     $('run-state').textContent = dirty ? `${generated ? '파일 생성됨' : '작성 중'} · 검토 내용 저장 전` : generated ? '파일 생성됨' : '작성 중 · 저장됨';
     $('run-state').classList.toggle('is-generated', generated); $('run-state').classList.toggle('is-dirty', dirty);
   }
@@ -195,7 +198,7 @@ function renderHistory() {
   for (const run of runs) {
     const button = element('button', undefined, 'run-button'); button.type = 'button'; button.disabled = busy;
     button.setAttribute('aria-pressed', String(current?.run.id === run.id));
-    button.append(element('strong', `파일 생성 ${formatTime(run.generatedAt)}`), element('small', run.carrierName || '네이버'));
+    button.append(element('strong', `파일 생성 ${formatTime(run.fileCreatedAt || run.generatedAt)}`), element('small', run.carrierName || '네이버'));
     for (const file of run.files || []) button.append(element('small', `파일: ${file.name}`));
     const state = run.registrationState || 'unchecked';
     button.append(element('span', historyRegistrationLabels[state] || '네이버 등록 확인 필요', `registration-badge ${state === 'complete' ? 'registered' : state}`));
@@ -208,7 +211,7 @@ function renderHistory() {
 }
 async function loadHistory() {
   const query = showRecentHistory ? '' : `?date=${encodeURIComponent(selectedSourceDate)}`;
-  const data = await api(`/api/invoices${query}`); runs = (data.runs || []).filter(run => run.generatedAt); renderHistory();
+  const data = await api(`/api/invoices${query}`); runs = (data.runs || []).filter(run => run.fileCreatedAt || run.generatedAt); renderHistory();
 }
 function saveItemDraft(item, fields) {
   const key = String(item.id), next = { ...draftItem(item), ...fields };
@@ -218,7 +221,7 @@ function saveItemDraft(item, fields) {
   for (const control of document.querySelectorAll('[data-item-id]')) if (control.dataset.itemId === key && control !== document.activeElement) control.value = control.classList.contains('item-decision') ? next.decision : next.note || '';
   refreshControls();
 }
-function warningReview(issues, showLocation = false) {
+function warningReview(issues, showLocation = false, manualAvailable = false) {
     const issue = issues[0], keys = issues.map(value => value.key);
     const missingOrder = issue.kind === 'missing_saved_order', issueMessage = missingOrder ? '주문 누락 가능성있음' : issue.message;
     const draft = draftIssue(issue), row = element('div', undefined, 'record-warning');
@@ -235,8 +238,9 @@ function warningReview(issues, showLocation = false) {
         : '하단의 등록 상태 확인을 눌러 현재 상태를 다시 조회하세요.'));
       row.append(description); return row;
     }
+    const manualWarning = manualAvailable && ['parcel_uncertain', 'split_mapping', 'reprint_uncertain'].includes(issue.kind);
     if (!missingOrder) description.append(element('small', issue.blocking
-      ? `${issue.resolved ? '확인 내용이 저장되었습니다. ' : ''}관련 상품주문은 보류·제외해야 합니다.`
+      ? manualWarning ? '실제 송장 확인에서 사용한 송장을 확정하세요.' : `${issue.resolved ? '확인 내용이 저장되었습니다. ' : ''}관련 상품주문은 보류·제외해야 합니다.`
       : issue.resolved ? '확인 내용이 저장되었습니다.'
       : '경고 내용을 확인해 주세요.'));
     const review = element('div', undefined, 'issue-review'), label = element('label'), checkbox = element('input');
@@ -267,14 +271,14 @@ function warningReview(issues, showLocation = false) {
     checkbox.addEventListener('change', update); note.addEventListener('input', update);
     review.append(label, note); row.append(description, review); return row;
 }
-function appendWarnings(target, issues) {
+function appendWarnings(target, issues, manualAvailable = false) {
   const groups = new Map();
   for (const issue of issues) {
     const draft = draftIssue(issue), key = JSON.stringify([issue.message, Boolean(issue.blocking), Boolean(draft.resolved), draft.note || '']);
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(issue);
   }
-  for (const group of groups.values()) target.append(warningReview(group));
+  for (const group of groups.values()) target.append(warningReview(group, false, manualAvailable));
 }
 function warningsForOrder(order) {
   const linked = current.items.filter(item => order.itemIds.includes(item.id));
@@ -395,7 +399,9 @@ function replacementChoices() {
 }
 function trackingChoices(order, linked) {
   const container = element('div');
-  const groups = (current?.trackingReview?.groups || []).filter(group => group.itemIds.some(id => linked.some(item => item.id === id)));
+  const groups = (current?.trackingReview?.groups || []).filter(group => group.itemIds.some(id => linked.some(item => item.id === id))
+    && !(group.needsSelection && !group.assignEligible && !group.replaceEligible && !group.splitEligible
+      && current.manualTracking?.groups?.some(manual => group.productOrderIds.includes(manual.productOrderId))));
   if (!groups.length) {
     for (const number of order.trackingNumbers) container.append(element('strong', number));
     return container;
@@ -510,9 +516,15 @@ function renderItems() {
       product.append(history);
     }
     const tracking = element('td');
+    const manual = (current.manualTracking?.groups || []).find(group => linked.some(item => item.productOrderId === group.productOrderId));
     if (readonly) for (const number of order.trackingNumbers) tracking.append(element('strong', number));
     else tracking.append(trackingChoices(order, linked));
-    if (!order.trackingNumbers.length) tracking.append(element('span', order.state === 'not_matched' ? '송장 매칭 전' : '대응 송장 없음'));
+    if (!order.trackingNumbers.length) tracking.append(element('span', manual ? '적용 송장 미확정' : order.state === 'not_matched' ? '송장 매칭 전' : '대응 송장 없음'));
+    if (!readonly && manual) {
+      const button = element('button', '실제 송장 확인', 'manual-tracking-button'); button.type = 'button';
+      button.setAttribute('aria-label', `${manual.recipient || order.recipient} 실제 송장 확인`);
+      button.addEventListener('click', () => openManualTracking(manual)); tracking.append(button);
+    }
     const history = shipmentHistory(linked, order.courierRows); if (history) tracking.append(history);
     const review = element('td');
     if (readonly) {
@@ -541,7 +553,7 @@ function renderItems() {
         appendWarnings(reviewDetails, recorded);
         review.append(reviewDetails);
       }
-      appendWarnings(review, active);
+      appendWarnings(review, active, Boolean(manual));
     }
     const registration = element('td');
     if (readonly) {
@@ -643,7 +655,7 @@ function showRun(data) {
     : '이전 방식으로 매칭한 내역입니다. 다른 날짜의 주문까지 찾으려면 같은 ①·③ 파일을 다시 선택해 매칭하세요. 기존 검토·파일 생성 내역은 보존됩니다.';
   $('run-title').textContent = '송장 매칭 결과';
   const fileSummary = (data.files || []).map(file => `${file.kind === 'naver' ? '①' : '③'} ${file.name}`).join(' · ');
-  $('run-description').textContent = `${formatTime(data.run.createdAt)} · 네이버 스마트스토어 · ${data.run.carrierName || ''}\n${fileSummary || '선택한 확인한 주문 작업 기준으로 연결한 결과입니다.'}${data.run.generatedAt ? `\n파일 생성: ${formatTime(data.run.generatedAt)} · 네이버 등록 상태는 별도로 확인합니다.` : '\n작성 내용은 보관되며, 파일을 생성하기 전에는 왼쪽 생성 내역에 표시하지 않습니다.'}`;
+  $('run-description').textContent = `${formatTime(data.run.createdAt)} · 네이버 스마트스토어 · ${data.run.carrierName || ''}\n${fileSummary || '선택한 확인한 주문 작업 기준으로 연결한 결과입니다.'}${data.run.generatedAt ? `\n파일 생성: ${formatTime(data.run.generatedAt)} · 네이버 등록 상태는 별도로 확인합니다.` : ''}`;
   const currentSummary = data.currentSummary || data.summary;
   $('total-count').textContent = count(data.items.length); $('ready-count').textContent = count(currentSummary.connected ?? data.items.filter(item => item.sourceRows?.length).length);
   const sameDate = data.summary.selectedDate ?? data.items.filter(item => item.sourceDate === selectedSourceDate).length;
@@ -658,6 +670,7 @@ function showRun(data) {
   $('last-check').textContent = checkedAt ? `마지막 등록 조회: ${formatTime(checkedAt)}` : '아직 네이버 등록 상태를 조회하지 않았습니다.';
   renderRegistrationResult();
   renderIssues(); if (unavailable) $('issues-section').hidden = true; renderItems(); renderHistory(); refreshControls();
+  if (!$('additional-export').hidden) loadAdditionalFiles(data.run.id);
 }
 async function loadRun(id) {
   setBusy(true); message('송장 매칭 결과를 불러오고 있습니다.');
@@ -755,6 +768,169 @@ async function downloadExcel(mode = primaryDownloadMode()) {
   } catch (error) { message(downloadStarted ? `엑셀 다운로드 요청은 완료했지만 생성 내역을 갱신하지 못했습니다. 왼쪽 새로고침으로 확인해 주세요.\n${error.message}` : error.message, true); }
   finally { setBusy(false); }
 }
+
+const manualModes = { separate: '분리 배송', combined: '합포장', replace: '재출력 교체', split: '분할 상자 · 대표 송장' };
+function invoiceActionOptions(body) {
+  return { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) };
+}
+function actionSelect(label, placeholder, options) {
+  const field = element('label', label), select = element('select');
+  select.add(new Option(placeholder, ''));
+  for (const [value, name] of options) select.add(new Option(name, value));
+  field.append(select); return { field, select };
+}
+function invoiceActionDialog({ title, fields, path, getBody, preview, applyLabel, applied }) {
+  const dialog = $('invoice-action-dialog'), form = $('invoice-action-form'), editor = $('invoice-action-fields'),
+    previewArea = $('invoice-action-preview'), error = $('invoice-action-error'), submit = $('invoice-action-submit'), back = $('invoice-action-back');
+  const runId = current.run.id, expectedVersion = current.viewVersion;
+  let reviewed = null;
+  const reset = () => {
+    reviewed = null; editor.hidden = false; previewArea.hidden = true; error.hidden = true; back.hidden = true;
+    submit.textContent = '미리보기'; delete submit.dataset.locked; refreshControls();
+  };
+  $('invoice-action-title').textContent = title; editor.replaceChildren(fields); reset();
+  back.onclick = reset;
+  form.onsubmit = async event => {
+    event.preventDefault();
+    if (busy || submit.disabled) return;
+    error.hidden = true; setBusy(true);
+    try {
+      const body = reviewed || { expectedVersion, ...getBody() };
+      const result = await api(`/api/invoices/${runId}/${path}`, invoiceActionOptions({ ...body, validateOnly: !reviewed }));
+      if (reviewed) {
+        dialog.close(); applied(result); return;
+      }
+      const { content, canApply } = preview(result);
+      reviewed = { ...body, expectedVersion: result.viewVersion };
+      previewArea.replaceChildren(content); editor.hidden = true; previewArea.hidden = false; back.hidden = false;
+      submit.textContent = applyLabel; submit.dataset.locked = String(!canApply);
+    } catch (failure) { error.textContent = failure.message; error.hidden = false; }
+    finally { setBusy(false); }
+  };
+  dialog.showModal();
+}
+function productActionLabel(item) {
+  const name = [item.productName, item.optionName].filter(Boolean);
+  return [...new Set(name)].concat(item.productOrderId).join(' · ');
+}
+function openManualTracking(group) {
+  if (busy || isDirty() || !current) return;
+  const groups = current.manualTracking.groups.filter(value => value.productOrderId === group.productOrderId
+    || group.orderId && value.orderId === group.orderId);
+  const fields = document.createDocumentFragment();
+  const entries = groups.map(entry => {
+    const item = element('fieldset', undefined, 'invoice-action-item'), companions = element('div', undefined, 'invoice-action-fields');
+    item.append(element('legend', productActionLabel(entry)));
+    if (entry.trackingNumber) item.append(element('small', `현재 송장 ${entry.trackingNumber}`));
+    const candidates = entry.candidates.filter(candidate => candidate.valid !== false);
+    const number = actionSelect('적용 송장', '송장 선택', candidates.map(candidate => [candidate.trackingNumber,
+      [candidate.trackingNumber, candidate.sources?.[0]?.sourceRow ? `원본 ${candidate.sources[0].sourceRow}행` : '',
+        candidate.valid === null ? '사용 여부 확인 필요' : ''].filter(Boolean).join(' · ')]));
+    const mode = actionSelect('배송 방식', '방식 선택', (entry.modes || Object.keys(manualModes)).map(value => [value, manualModes[value]]));
+    const pair = element('div', undefined, 'invoice-action-fields'); pair.append(number.field, mode.field);
+    let related = [];
+    const showCompanions = () => {
+      const selected = candidates.find(candidate => candidate.trackingNumber === number.select.value);
+      related = !selected || !mode.select.value ? [] : candidates.filter(candidate => candidate.internalId === selected.internalId
+        && candidate.trackingNumber !== selected.trackingNumber).map(candidate => {
+        const options = [['unused', '미사용 확인']];
+        if (mode.select.value === 'split') options.unshift(['used', '추가 상자에 사용']);
+        return { number: candidate.trackingNumber, ...actionSelect(candidate.trackingNumber, '사용 여부 미확인', options) };
+      });
+      companions.replaceChildren(...related.map(value => value.field));
+    };
+    number.select.addEventListener('change', showCompanions); mode.select.addEventListener('change', showCompanions);
+    item.append(pair, companions); fields.append(item);
+    return {
+      read() {
+        const trackingNumber = number.select.value, selectedMode = mode.select.value;
+        if (!trackingNumber && !selectedMode) return null;
+        if (!trackingNumber || !selectedMode) throw new Error(`${entry.productOrderId}의 적용 송장과 배송 방식을 선택해 주세요.`);
+        return { productOrderId: entry.productOrderId, trackingNumber, mode: selectedMode,
+          usedTrackingNumbers: related.filter(value => value.select.value === 'used').map(value => value.number),
+          unusedTrackingNumbers: related.filter(value => value.select.value === 'unused').map(value => value.number) };
+      },
+    };
+  });
+  invoiceActionDialog({ title: `${group.recipient || '상품주문'} 실제 송장 확인`, fields, path: 'confirm-tracking',
+    getBody() {
+      const resolutions = entries.map(entry => entry.read()).filter(Boolean);
+      if (!resolutions.length) throw new Error('실제 사용한 송장을 하나 이상 선택해 주세요.');
+      return { resolutions };
+    },
+    preview(result) {
+      const content = element('ul');
+      for (const confirmed of result.confirmations) {
+        const extras = (confirmed.usedTrackingNumbers || []).join(', '), unused = (confirmed.unusedTrackingNumbers || []).join(', ');
+        content.append(element('li', `${productActionLabel(confirmed)}\n${confirmed.previousTrackingNumber || '미확정'} → ${confirmed.trackingNumber} · ${manualModes[confirmed.mode]}${extras ? `\n추가 상자 ${extras}` : ''}${unused ? `\n미사용 ${unused}` : ''}`));
+      }
+      return { content, canApply: result.changed > 0 };
+    }, applyLabel: '실제 송장 확정', applied(result) {
+      showRun(result); message(`상품주문 ${count(result.changed)}건의 실제 송장을 확정했습니다.`);
+    },
+  });
+}
+
+function additionalFileLink(runId, file, text = file.filename) {
+  const link = element('a', text);
+  link.href = `/api/invoices/${runId}/additional-files/${file.id}`; link.download = file.filename;
+  return link;
+}
+let additionalFilesRequest = 0;
+async function loadAdditionalFiles(runId, open = false) {
+  const request = ++additionalFilesRequest, history = $('additional-file-history'), list = $('additional-file-list');
+  history.hidden = true; list.replaceChildren();
+  try {
+    const { files } = await api(`/api/invoices/${runId}/additional-files`);
+    if (request !== additionalFilesRequest || current?.run.id !== runId) return;
+    for (const file of files) {
+      const row = element('li');
+      row.append(additionalFileLink(runId, file, `${formatTime(file.createdAt)} · ${file.mode === 'all' ? '전체 엑셀' : '미등록 추가 엑셀'} · ${count(file.productOrderIds.length)}건`));
+      list.append(row);
+    }
+    history.hidden = !files.length;
+    current.run.fileCreatedAt = files.at(-1)?.createdAt || current.run.generatedAt;
+    refreshControls();
+    if (open) history.open = true;
+  } catch { /* 보관 파일 목록 조회 오류는 송장 작업을 막지 않습니다. */ }
+}
+function openAdditionalExport(mode) {
+  if (busy || isDirty() || !current) return;
+  const runId = current.run.id, completeFile = mode === 'all', fields = document.createDocumentFragment();
+  const items = current.items.filter(item => !item.superseded), byId = new Map(items.map(item => [item.productOrderId, item]));
+  const entries = [];
+  if (completeFile) fields.append(element('p', '등록 확인을 마친 주문도 포함합니다.'));
+  else {
+    fields.append(element('p', '추가 파일에 넣을 상품주문을 선택하세요. 네이버에서 미등록을 확인한 주문만 포함합니다.'));
+    for (const item of items) {
+      const label = element('label', undefined, 'invoice-export-target'), checkbox = element('input'); checkbox.type = 'checkbox';
+      const recipient = (current.currentOrders || current.orders).find(order => order.itemIds.includes(item.id))?.recipient || item.recipient;
+      label.append(checkbox, element('span', [recipient, productActionLabel(item)].filter(Boolean).join(' · ')));
+      fields.append(label); entries.push({ productOrderId: item.productOrderId, checkbox });
+    }
+  }
+  invoiceActionDialog({ title: completeFile ? '현재 매칭 전체 엑셀' : '지정 주문 미등록 엑셀', fields, path: 'additional-files',
+    getBody() {
+      const productOrderIds = completeFile ? null : entries.filter(entry => entry.checkbox.checked).map(entry => entry.productOrderId);
+      if (!completeFile && !productOrderIds.length) throw new Error('엑셀에 넣을 상품주문을 하나 이상 선택해 주세요.');
+      return { mode, productOrderIds };
+    },
+    preview(result) {
+      const content = document.createDocumentFragment(), included = element('ul'), skipped = element('ul');
+      for (const item of result.included) included.append(element('li', `${productActionLabel(byId.get(item.productOrderId) || item)} · ${item.trackingNumber}`));
+      for (const item of result.skipped) skipped.append(element('li', `${productActionLabel(byId.get(item.productOrderId) || item)}\n${item.reason}`));
+      content.append(element('strong', `포함 ${count(result.included.length)}건`), included);
+      if (result.skipped.length) content.append(element('strong', `미포함 ${count(result.skipped.length)}건`), skipped);
+      return { content, canApply: result.included.length > 0 };
+    }, applyLabel: '엑셀 생성 및 다운로드', applied(result) {
+      const link = additionalFileLink(runId, result.file);
+      document.body.append(link); link.click(); link.remove();
+      loadAdditionalFiles(runId, true);
+      loadHistory().catch(error => { $('history-message').textContent = error.message; });
+      message(`${completeFile ? '전체' : '미등록 추가'} 엑셀 ${count(result.included.length)}건의 다운로드를 요청했습니다.${result.skipped.length ? ` 미포함 ${count(result.skipped.length)}건` : ''}`);
+    },
+  });
+}
 function renderRegistrationResult() {
   const result = $('registration-result'); result.classList.remove('is-error');
   if (current?.currentSummary) {
@@ -828,6 +1004,10 @@ $('save-button').addEventListener('click', saveReview);
 $('replace-tracking-button').addEventListener('click', replaceCurrentTracking);
 $('export-button').addEventListener('click', () => downloadExcel());
 $('redownload-button').addEventListener('click', () => downloadExcel(storedDownloadMode()));
+$('pending-export-button').addEventListener('click', () => openAdditionalExport('pending'));
+$('full-export-button').addEventListener('click', () => openAdditionalExport('all'));
+$('invoice-action-close').addEventListener('click', () => $('invoice-action-dialog').close());
+$('invoice-action-dialog').addEventListener('cancel', event => { if (busy) event.preventDefault(); });
 $('check-button').addEventListener('click', checkRegistration);
 $('date-check-button').addEventListener('click', checkRegistration);
 $('refresh-run').addEventListener('click', () => { if (!busy && current && allowDiscard()) loadRun(current.run.id); });

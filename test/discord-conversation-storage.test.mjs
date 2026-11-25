@@ -68,6 +68,24 @@ test('작업번호와 상품주문번호로 대화를 찾고, 새 요청이나 �
   assert.equal(s.load('주문 작업 #24 상품명 정리해줘').status, 'none');
 });
 
+test('실제 송장 확인은 최신 메시지의 명시 승인 또는 미리보기에 답장한 직원에게 연결된다', t => {
+  const s = setup(t), productOrderId = '2026111900000001';
+  const preview = { runId: 24, viewVersion: '1'.repeat(64), productOrderIds: [productOrderId], manualResolutions: [{
+    productOrderId, trackingNumber: '45621523006', mode: 'separate', usedTrackingNumbers: [], unusedTrackingNumbers: [],
+  }] };
+  const colleague = { ...scope, userId: '666666666666666666' };
+  const load = (text, actor = scope, replyToId = null, elapsed = 10_000) => loadDiscordConversation(s.db,
+    { ...actor, text, replyToId, useWorkHistory: true }, start + elapsed);
+  s.save(1, { pending: preview });
+  assert.deepEqual(load('그래, 그대로 적용해줘').pending, preview);
+  assert.equal(load('확인').pending, null);
+  assert.equal(load('적용해줘', colleague).pending, null);
+  assert.equal(load('적용해줘', scope, null, day).pending, null);
+  assert.deepEqual(load('적용해줘', colleague, botMessage(1)).pending, preview);
+  s.save(2, { ...colleague });
+  assert.equal(load('적용해줘').pending, null);
+});
+
 test('멘션 없는 후속 질문은 내 관련 대화를 찾고, 새 업무와 확인 대기 없는 송장 적용은 따로 처리합니다', t => {
   const s = setup(t), employee = { ...scope, userId: '666666666666666666' };
   const { conversationId } = s.save(1, { runIds: [24], userText: '어제 송장 검토 결과 조회해줘' });

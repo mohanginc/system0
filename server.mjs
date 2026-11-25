@@ -17,7 +17,8 @@ import { previewShippingBoard } from './lib/shipping-preview.mjs';
 import { productCatalog, addProduct, linkProductName } from './lib/products.mjs';
 import { CARRIERS, unlockNaverFiles, classifyInvoiceFiles, prepareInvoiceFile, importInvoiceFiles, listInvoiceRuns, listInvoiceDrafts, reviseInvoiceItems,
   exportInvoices, downloadInvoices, latestInvoice, refreshInvoiceStatus, refreshOutsideInvoiceStatus,
-  invoiceView, invoiceSourceView, invoiceDateRunIds, checkInvoiceDate, applyInvoiceTrackingReview, lookupInvoiceOrder } from './lib/invoices.mjs';
+  invoiceView, invoiceSourceView, invoiceDateRunIds, checkInvoiceDate, applyInvoiceTrackingReview, confirmInvoiceTracking, lookupInvoiceOrder } from './lib/invoices.mjs';
+import { createInvoiceExportFile, listInvoiceExportFiles, downloadInvoiceExportFile } from './lib/invoice-export-files.mjs';
 import { readDiscordConfig, discordScopeAllowed, discordEnvPath } from './lib/discord-config.mjs';
 import { initializeDiscordWorkflow, claimDiscordRequest, finishDiscordRequest, discordContext, interpretDiscordRequest } from './lib/discord-workflow.mjs';
 import { initializeDiscordConversations, loadDiscordConversation, saveDiscordConversation, pruneDiscordConversations } from './lib/discord-conversations.mjs';
@@ -224,6 +225,39 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
     try { response.json(applyInvoiceTrackingReview(db, id, request.body)); }
     catch (error) {
       if (error.status === 409) response.status(409).json({ error: error.message, code: error.code });
+      else throw error;
+    }
+  });
+  app.post('/api/invoices/:id/confirm-tracking', (request, response) => {
+    const id = ensureInvoice(request, response, true);
+    if (!id) return;
+    try { response.json(confirmInvoiceTracking(db, id, request.body)); }
+    catch (error) {
+      if (error.status === 409) response.status(409).json({ error: error.message, code: error.code });
+      else throw error;
+    }
+  });
+  app.get('/api/invoices/:id/additional-files', (request, response) => {
+    const id = ensureInvoice(request, response);
+    if (id) response.json({ files: listInvoiceExportFiles(db, id) });
+  });
+  app.post('/api/invoices/:id/additional-files', (request, response) => {
+    const id = ensureInvoice(request, response, true);
+    if (!id) return;
+    try { response.json(createInvoiceExportFile(db, id, request.body)); }
+    catch (error) {
+      if (error.status === 409) response.status(409).json({ error: error.message, code: error.code });
+      else throw error;
+    }
+  });
+  app.get('/api/invoices/:id/additional-files/:fileId', (request, response) => {
+    const id = ensureInvoice(request, response);
+    if (!id) return;
+    try {
+      const output = downloadInvoiceExportFile(db, id, Number(request.params.fileId));
+      response.attachment(output.filename).type(output.contentType).send(output.buffer);
+    } catch (error) {
+      if (error.status === 404) response.status(404).json({ error: error.message, code: error.code });
       else throw error;
     }
   });

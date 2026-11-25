@@ -15,6 +15,10 @@ class Node {
   replaceChildren(...nodes) { this.children = nodes; }
   setAttribute() {}
   addEventListener(type, callback) { this.listeners.set(type, callback); }
+  showModal() { this.open = true; }
+  close() { this.open = false; }
+  click() { this.clicked = true; }
+  remove() {}
 }
 const reviewGroup = (changes = {}) => ({ key: 'shipment-1', internalId: 'mock-internal-1', orderId: 'mock-order-1', recipient: '모의 수취인',
   itemIds: [1, 2], productOrderIds: ['mock-product-1', 'mock-product-2'],
@@ -28,7 +32,7 @@ function harness(initial = detail()) {
   const nodes = new Map(), calls = [], confirms = [];
   const getNode = id => { if (!nodes.has(id)) nodes.set(id, new Node()); return nodes.get(id); };
   const context = vm.createContext({ console, URL, URLSearchParams, AbortSignal, setTimeout, clearTimeout,
-    document: { getElementById: getNode, createElement: tag => new Node(tag), createTextNode: text => Object.assign(new Node('#text'), { textContent: text }),
+    document: { body: getNode('body'), getElementById: getNode, createElement: tag => new Node(tag), createTextNode: text => Object.assign(new Node('#text'), { textContent: text }),
       createDocumentFragment: () => new Node('fragment'), querySelectorAll: () => [] },
     window: { location: { search: '' }, addEventListener() {}, confirm: text => { confirms.push(text); return true; } },
     Option: class extends Node { constructor(text, value) { super('option'); this.textContent = text; this.value = value; } },
@@ -44,6 +48,68 @@ function harness(initial = detail()) {
   return { context, calls, nodes, confirms, run: code => vm.runInContext(code, context),
     plain: code => JSON.parse(JSON.stringify(vm.runInContext(code, context))) };
 }
+
+const childrenWith = (node, tag) => [node, ...node.children.flatMap(child => childrenWith(child, tag))].filter(child => child.tagName === tag);
+const submit = h => h.nodes.get('invoice-action-form').onsubmit({ preventDefault() {} });
+
+test('잠긴 상품주문의 후보를 실제 송장 확인으로 미리보고 두 상품의 송장을 정해진 범위에 저장한다', async () => {
+  const candidates = [{ trackingNumber: '001234567001', internalId: 'parcel-a', valid: null },
+    { trackingNumber: '001234567002', internalId: 'parcel-b', valid: true },
+    { trackingNumber: '001234567003', internalId: 'parcel-a', valid: null }];
+  const groups = ['13cm', '15cm', '20cm'].map((productName, index) => ({ recipient: '모의 수취인', orderId: index < 2 ? 'order-1' : 'order-2',
+    productOrderId: `product-${index + 1}`, productName, modes: ['separate', 'combined', 'replace', 'split'], candidates }));
+  const h = harness(detail({ manualTracking: { groups } }));
+  h.context.mockApi = async (url, options) => {
+    const body = JSON.parse(options.body); h.calls.push({ url, body });
+    return { ...h.context.fixture, changed: body.resolutions.length, confirmations: body.resolutions.map(resolution => ({ ...resolution,
+      productName: groups.find(group => group.productOrderId === resolution.productOrderId).productName })) };
+  };
+  h.run('openManualTracking(current.manualTracking.groups[0]);');
+  const fields = childrenWith(h.nodes.get('invoice-action-fields'), 'fieldset');
+  assert.equal(fields.length, 2);
+  const choose = (field, trackingNumber) => {
+    const [number, mode] = childrenWith(field, 'select');
+    number.value = trackingNumber; number.listeners.get('change')();
+    mode.value = 'separate'; mode.listeners.get('change')();
+  };
+  assert.match(childrenWith(fields[0], 'option')[1].textContent, /001234567001.*사용 여부 확인 필요/);
+  choose(fields[0], '001234567001'); choose(fields[1], '001234567002');
+  childrenWith(fields[0], 'select')[2].value = 'unused';
+  await submit(h);
+  assert.equal(h.calls.length, 1);
+  assert.equal(h.calls[0].url, '/api/invoices/8/confirm-tracking');
+  assert.deepEqual(h.calls[0].body, { expectedVersion: 'version-1', validateOnly: true, resolutions: [
+    { productOrderId: 'product-1', trackingNumber: '001234567001', mode: 'separate', unusedTrackingNumbers: ['001234567003'], usedTrackingNumbers: [] },
+    { productOrderId: 'product-2', trackingNumber: '001234567002', mode: 'separate', unusedTrackingNumbers: [], usedTrackingNumbers: [] },
+  ] });
+  assert.match(childrenWith(h.nodes.get('invoice-action-preview'), 'li')[0].textContent, /미사용 001234567003/);
+  await submit(h);
+  assert.deepEqual(h.calls[1].body, { ...h.calls[0].body, validateOnly: false });
+  assert.equal(h.nodes.get('invoice-action-dialog').open, false);
+});
+
+test('추가 엑셀에 지정한 주문만 넘기고 전체 엑셀은 독립된 방식과 다운로드 경로를 사용한다', async () => {
+  const initial = detail({ items: ['product-1', 'product-2'].map((productOrderId, index) => ({ id: index + 1, productOrderId, productName: `상품 ${index + 1}` })) });
+  const h = harness(initial);
+  const file = { id: 22, filename: '새_엑셀.xlsx', mode: 'pending', productOrderIds: ['product-2'] };
+  h.context.mockApi = async (url, options) => {
+    if (!options) return { files: [file] };
+    const body = JSON.parse(options.body); h.calls.push({ url, body });
+    return { viewVersion: initial.viewVersion, file: body.validateOnly ? null : file,
+      included: [{ productOrderId: 'product-2', trackingNumber: '001234567002' }],
+      skipped: body.mode === 'all' ? [{ productOrderId: 'product-1', code: 'pending', reason: '보류' }] : [] };
+  };
+  h.run("openAdditionalExport('pending');");
+  childrenWith(h.nodes.get('invoice-action-fields'), 'input')[1].checked = true;
+  await submit(h); await submit(h);
+  assert.deepEqual(h.calls, [true, false].map(validateOnly => ({ url: '/api/invoices/8/additional-files', body: {
+    expectedVersion: 'version-1', mode: 'pending', productOrderIds: ['product-2'], validateOnly } })));
+  const link = h.nodes.get('body').children[0];
+  assert.equal(link.href, '/api/invoices/8/additional-files/22'); assert.equal(link.clicked, true);
+  h.run("openAdditionalExport('all');"); await submit(h);
+  assert.deepEqual(h.calls[2].body, { expectedVersion: 'version-1', mode: 'all', productOrderIds: null, validateOnly: true });
+  assert.match(childrenWith(h.nodes.get('invoice-action-preview'), 'li')[1].textContent, /product-1.*\n보류/);
+});
 
 test('화면의 송장 선택은 교체·분할 모드를 구분해 새 업무 API로 저장한다', async () => {
   for (const mode of ['replace', 'split']) {

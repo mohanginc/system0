@@ -55,6 +55,10 @@
           <div class="result-footer"><span id="visible-count"></span><span id="last-check"></span></div>
           <div class="review-actions"><span id="dirty-note" role="status"></span><button id="save-button" type="button" disabled>검토 내용 저장</button></div>
           <div class="invoice-export"><div><strong>네이버 업로드용 엑셀</strong><p id="export-note">엑셀 다운로드만으로 등록 완료가 되지 않습니다.</p></div><div class="export-actions"><button id="redownload-button" type="button" hidden>생성한 엑셀 다시 받기</button><button id="export-button" class="primary" type="button" disabled>네이버 업로드용 엑셀</button></div></div>
+          <div id="additional-export" class="additional-export" hidden>
+            <div class="additional-export-actions"><button id="pending-export-button" type="button">지정 주문 미등록 엑셀</button><button id="full-export-button" type="button">현재 매칭 전체 엑셀</button></div>
+            <details id="additional-file-history" hidden><summary>추가 엑셀 생성 내역</summary><ul id="additional-file-list"></ul></details>
+          </div>
           <div class="check-registration"><div><strong>스마트스토어에 업로드하셨나요?</strong><p>등록 상태만 조회합니다. 발주 확인이나 송장 전송은 하지 않습니다.</p><p id="registration-result" class="registration-result" role="status" aria-live="polite"></p></div><button id="check-button" type="button">등록 상태 확인</button></div>
         </section>
         <section id="outside-target-section" class="invoice-card outside-target-section" hidden><details><summary>이번 네이버 파일에 없는 관련 주문 <span id="outside-target-count"></span><span id="outside-target-summary" role="status"></span></summary><p class="small-note">관련 날짜의 저장 주문을 API로 조회합니다. 아래 주문은 이번 엑셀에 포함하지 않으며, 등록 확인은 실물 출고 확인과 별개입니다. 다시 조회하려면 ‘등록 상태 확인’을 누르세요.</p><div class="invoice-table-wrap"><table class="invoice-table preview-table outside-table"><thead><tr><th>수취인 · 주문번호</th><th>제품</th><th>② 원본 위치</th><th>네이버 확인 결과</th></tr></thead><tbody id="outside-target-rows"></tbody></table></div></details></section>
@@ -64,5 +68,18 @@
     </div>
   </main>
   <footer><span>system0 · 송장 매칭</span><span>네이버 수동 업로드 · 조회 전용</span></footer>
+  <dialog id="invoice-action-dialog" class="invoice-action-dialog" aria-labelledby="invoice-action-title">
+    <form id="invoice-action-form">
+      <h2 id="invoice-action-title"></h2>
+      <div id="invoice-action-fields" class="invoice-action-content"></div>
+      <div id="invoice-action-preview" class="invoice-action-content" hidden></div>
+      <p id="invoice-action-error" role="alert" hidden></p>
+      <div class="invoice-action-footer">
+        <button id="invoice-action-close" type="button">닫기</button>
+        <button id="invoice-action-back" type="button" hidden>다시 선택</button>
+        <button id="invoice-action-submit" class="primary" type="submit">확인</button>
+      </div>
+    </form>
+  </dialog>
 </body>
 </html>

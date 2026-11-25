@@ -25,8 +25,12 @@ const rows = bytes => XLSX.utils.sheet_to_json(XLSX.read(Buffer.from(bytes), { t
   .slice(1).map(row => [row[0], row[3]]);
 const pairs = orders => orders.map(value => [value.productOrderId, value.trackingNumber]);
 const components = output => (output.components || []).flatMap(row => row.components || []);
+const pendingOrder = order => registeredOrder(order, { status: 'PAYED', trackingNumber: '', deliveryCompanyCode: '', deliveryStatus: '' });
+const trackingResolution = (order, trackingNumber = order.trackingNumber, mode = 'separate') => ({ productOrderId: order.productOrderId,
+  trackingNumber, mode, usedTrackingNumbers: [], unusedTrackingNumbers: [] });
 
-async function boot(t, originalOrders, remoteOrders = originalOrders) {
+async function boot(t, originalOrders, remoteOrders = originalOrders, { modelClient, model = 'local-mock', remoteOrder = registeredOrder,
+  workHistory = false } = {}) {
   const toolRequests = [], webCalls = [], naverCalls = [];
   const byProduct = new Map(remoteOrders.map(value => [value.productOrderId, value]));
   let nextTurn;
@@ -37,6 +41,7 @@ async function boot(t, originalOrders, remoteOrders = originalOrders) {
     const sent = JSON.stringify(request.input);
     for (const secret of [config.secret, '테스트 수취인', '010-0000-0000', '서울 검증로 1']) assert.ok(!sent.includes(secret));
     toolRequests.push(request);
+    if (modelClient) return modelClient.responses.create(request);
     const next = await nextTurn(outputs);
     if (typeof next === 'string') return { output_text: next,
       output: [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: next, annotations: [] }] }] };
@@ -49,10 +54,11 @@ async function boot(t, originalOrders, remoteOrders = originalOrders) {
     getProductOrderIds: async orderId => remoteOrders.filter(value => value.orderId === orderId).map(value => value.productOrderId),
     queryProductOrders: async ids => {
       naverCalls.push(ids);
-      return ids.map(id => registeredOrder(byProduct.get(id)));
+      return ids.map(id => remoteOrder(byProduct.get(id)));
     },
   };
-  const app = createApp({ databasePath: ':memory:', apiKey: '', client, model: 'local-mock', discordConfig: config, naver });
+  const discordConfig = workHistory ? { ...config, plainMessageChannelIds: [scope.channelId] } : config;
+  const app = createApp({ databasePath: ':memory:', apiKey: '', client, model, discordConfig, naver });
   const server = await new Promise(resolve => {
     const listening = app.listen(0, '127.0.0.1', () => resolve(listening));
   });
@@ -68,7 +74,7 @@ async function boot(t, originalOrders, remoteOrders = originalOrders) {
     webCalls.push(call);
     return fetch(url, options).then(response => { call.status = response.status; return response; });
   };
-  const handle = createDiscordHandler({ config: { ...config, baseUrl }, fetcher });
+  const handle = createDiscordHandler({ config: { ...discordConfig, baseUrl }, fetcher });
   let eventId = 555555555555555555n;
   const event = (text, fields) => ({ ...scope, id: String(eventId++), kind: 'message', text, ...fields });
   const run = (message, steps, fields, onProgress) => {
@@ -108,8 +114,141 @@ async function boot(t, originalOrders, remoteOrders = originalOrders) {
     .run(date + 'T' + time + ':00.000Z', runId);
   const setCreatedAt = (runId, time) => app.locals.db.prepare('UPDATE invoice_runs SET created_at = ? WHERE id = ?')
     .run(date + 'T' + time + ':00.000Z', runId);
-  return { event, run, start, get, file, select, save, check, setGeneratedAt, setCreatedAt, webCalls, naverCalls, toolRequests };
+  return { event, run, start, get, file, select, save, check, request, json, setGeneratedAt, setCreatedAt, webCalls, naverCalls, toolRequests };
 }
+
+async function heldAdditionalFileScenario(t, { combined = false, live = false } = {}) {
+  const thirteen = order(1, { productName: '가상 쿠션 13cm', optionName: '높이: 13cm', recipient: '가상확인수취인' });
+  const fifteen = order(2, { orderId: thirteen.orderId, productName: '가상 쿠션 15cm', optionName: '높이: 15cm', recipient: thirteen.recipient });
+  const unknown = { ...thirteen, trackingNumber: '45660001999' };
+  const ordinary = Array.from({ length: 25 }, (_, index) => order(index + 3));
+  const orders = [thirteen, fifteen, ...ordinary], parcels = [fifteen, thirteen, unknown, ...ordinary];
+  const remoteOrder = order => order === thirteen || !combined && order === fifteen ? pendingOrder(order) : registeredOrder(order);
+  let modelOptions = {};
+  if (live) {
+    const { default: OpenAI } = await import('openai');
+    const { loadEnvFile } = await import('node:process');
+    loadEnvFile(process.env.SYSTEM0_TEST_AGENT_ENV);
+    modelOptions = { modelClient: new OpenAI({ apiKey: process.env.OPENAI_API_KEY, maxRetries: 0, timeout: 35000 }),
+      model: process.env.OPENAI_MODEL || 'gpt-6.1-sol' };
+  }
+  const app = await boot(t, orders, orders, { ...modelOptions, remoteOrder, workHistory: true });
+  let view = await app.start(orders, parcels);
+  assert.deepEqual(view.manualTracking.groups.map(group => group.productOrderId), [thirteen.productOrderId, fifteen.productOrderId]);
+  assert.ok(view.trackingReview.groups.every(group => !group.assignEligible));
+  const held = view.items.filter(item => [thirteen.productOrderId, fifteen.productOrderId].includes(item.productOrderId));
+  view = await app.save(view, held.map(item => ({ id: item.id, decision: 'hold', note: '확실한 항목부터 파일 생성' })),
+    view.issues.filter(issue => issue.reviewRequired && !issue.resolved).map(issue => ({ key: issue.key, note: '실물 확인 대기' })));
+  const archive = await app.file(view, 'auto');
+  assert.deepEqual(rows(archive), pairs(ordinary));
+  const runId = view.run.id;
+  const post = async (endpoint, body, status) => (await app.request(invoicePath(runId) + '/' + endpoint,
+    app.json('POST', body), status)).json();
+  return { app, thirteen, fifteen, unknown, ordinary, runId, archive, post };
+}
+
+test('두 상품·세 후보 예외를 대화에서 확정하고 웹과 동일하게 지정 미등록 두 행만 추가한다', async t => {
+  const { app, thirteen, fifteen, unknown, ordinary, runId, archive, post } = await heldAdditionalFileScenario(t);
+  const ids = [thirteen.productOrderId, fifteen.productOrderId], resolutions = [trackingResolution(thirteen), trackingResolution(fifteen)];
+  const original = await app.get(runId);
+  const note = `다음처럼 매치해서 가상확인수취인만 있는 네이버 등록 파일을 만들어줘\n${pairs([thirteen, fifteen]).map(pair => pair.join(', ')).join('\n')}`;
+  const draft = await app.run(note, [tool('read_invoice', { runId }),
+    tool('preview_invoice_tracking_resolution', { runId, resolutions, requestConfirmation: true }), '적용을 확인해 주세요.'],
+  { botMessageId: '777777777777777771' });
+  assert.match(draft.content, /실제 송장 확정 미리보기/);
+  for (const { trackingNumber } of resolutions) assert.ok(draft.content.includes(trackingNumber));
+  assert.equal((await app.get(runId)).viewVersion, original.viewVersion);
+  assert.equal(draft.files, undefined);
+  const webPreview = await post('confirm-tracking', { expectedVersion: original.viewVersion, resolutions, validateOnly: true });
+  assert.deepEqual(webPreview.confirmations.map(row => [row.productOrderId, row.trackingNumber]), pairs([thirteen, fifteen]));
+
+  const finished = await app.run('그대로 적용해줘', [tool('read_invoice', { runId }), tool('confirm_invoice_tracking_resolution', { runId }),
+    tool('check_invoice_registration', { date }), tool('read_invoice', { runId }),
+    tool('create_invoice_export', { runId, mode: 'pending', productOrderIds: ids, validateOnly: false }), '추가 파일 두 건을 만들었습니다.'],
+  { botMessageId: '777777777777777772' });
+  assert.equal(finished.files?.length, 1, finished.content);
+  assert.deepEqual(rows(finished.files[0].attachment), pairs([thirteen, fifteen]));
+  const latest = await app.get(runId);
+  assert.deepEqual(latest.items.slice(0, 2).map(item => [item.productOrderId, item.trackingNumber]), pairs([thirteen, fifteen]));
+  assert.equal(latest.items[0].physicalShipments.find(parcel => parcel.trackingNumber === unknown.trackingNumber).valid, null);
+  assert.deepEqual(latest.items.slice(2).map(item => [item.productOrderId, item.trackingNumber]), pairs(ordinary));
+  assert.deepEqual(await app.file(latest, 'saved'), archive);
+  const webFile = await post('additional-files', { expectedVersion: latest.viewVersion, mode: 'pending', productOrderIds: ids });
+  const downloaded = await app.request(invoicePath(runId) + '/additional-files/' + webFile.file.id);
+  assert.deepEqual(Buffer.from(await downloaded.arrayBuffer()), finished.files[0].attachment);
+  assert.equal(app.webCalls.filter(call => call.route.endsWith('/confirm-tracking') && !call.body.validateOnly).length, 1);
+  assert.ok(app.webCalls.some(call => call.route.endsWith('/additional-files') && call.body.productOrderIds.join() === ids.join()));
+});
+
+async function testCombinedRequest(t, live = false) {
+  const { app, thirteen, fifteen, ordinary, runId, archive, post } = await heldAdditionalFileScenario(t, { combined: true, live });
+  const ids = [thirteen.productOrderId, fifteen.productOrderId];
+  const resolutions = [trackingResolution(thirteen, fifteen.trackingNumber, 'combined'), trackingResolution(fifteen, fifteen.trackingNumber, 'combined')];
+  const review = await app.run(`${date} 송장 작업에서 가상확인수취인 13cm와 15cm는 ${fifteen.trackingNumber} 한 상자에 같이 보냈어. `
+    + '둘 다 붙인 라벨을 반영하고, 네이버에 아직 안 올린 것만 따로 파일로 줘. 몇 건은 이미 들어가 있는지도 알려줘.', [
+    tool('read_invoice', { runId }),
+    tool('find_invoice_items', { runId, recipient: thirteen.recipient, product: null, productOrderIds: [] }),
+    output => {
+      assert.deepEqual(output.items.map(item => item.productOrderId), ids);
+      return tool('preview_invoice_tracking_resolution', { runId, resolutions, requestConfirmation: true });
+    }, '합포장 확인 후 파일을 만들겠습니다.',
+  ], { botMessageId: '777777777777777773' });
+  assert.match(review.content, /실제 송장 확정 미리보기/, review.content);
+  const completed = await app.run('좋아, 그대로 진행해줘', [
+    tool('read_invoice', { runId }), tool('check_invoice_registration', { date }),
+    output => {
+      assert.equal(output.confirmationRequired, true);
+      return tool('confirm_invoice_tracking_resolution', { runId });
+    }, tool('check_invoice_registration', { date }),
+    tool('read_invoice', { runId }), tool('create_invoice_export', { runId, mode: 'pending', productOrderIds: ids, validateOnly: false }),
+    '1건은 등록 완료입니다.',
+  ], { botMessageId: '777777777777777774' });
+  if (live) t.diagnostic(app.webCalls.filter(call => call.route.startsWith('/api/invoices')).map(call => `${call.method} ${call.route} ${call.status}`).join(' | '));
+  assert.equal(completed.files?.length, 1, completed.content);
+  assert.deepEqual(rows(completed.files[0].attachment), [[thirteen.productOrderId, fifteen.trackingNumber]]);
+  const latest = await app.get(runId);
+  assert.equal(item(latest, fifteen).registrationState, 'complete');
+  assert.equal(item(latest, thirteen).registrationState, 'pending');
+  assert.deepEqual(await app.file(latest, 'saved'), archive);
+  if (!live) {
+    const blocked = await app.run(`전체 파일 말고 ${thirteen.productOrderId} 한 건만 보낼 엑셀을 만들어줘.`, [tool('read_invoice', { runId }),
+      tool('get_invoice_file', { runId, mode: 'export' }), output => {
+        assert.equal(output.ok, false);
+        return tool('create_invoice_export', { runId, mode: 'all', productOrderIds: null, validateOnly: false });
+      }, output => {
+        assert.equal(output.confirmationRequired, true);
+        return '범위를 확인해 주세요.';
+      }]);
+    assert.equal(blocked.files, undefined);
+    assert.match(blocked.content, /전체 엑셀 범위 확인/);
+    const expansion = await app.run(`${thirteen.productOrderId}의 등록 상태를 보고 이 송장 작업을 한 파일로 묶어줘.`, [
+      tool('read_invoice', { runId }), tool('create_invoice_export', { runId, mode: 'all', productOrderIds: null, validateOnly: false }),
+      '상품주문은 발송 대기입니다.',
+    ], { botMessageId: '777777777777777775' });
+    assert.equal(expansion.files, undefined);
+    assert.match(expansion.content, /27건/);
+    const approved = await app.run('그대로 생성해줘', [tool('read_invoice', { runId }),
+      tool('create_invoice_export', { runId, mode: 'all', productOrderIds: null, validateOnly: false }), '전체 엑셀입니다.',
+    ], { botMessageId: '777777777777777776' });
+    assert.equal(rows(approved.files[0].attachment).length, 27);
+  }
+  const full = await app.run(`${date} 송장 작업의 등록 완료분까지 포함해 전체 확인용 엑셀도 별도로 줘.`, [
+    tool('read_invoice', { runId }), tool('create_invoice_export', { runId, mode: 'all', productOrderIds: null, validateOnly: false }), '전체 확인용입니다.',
+  ]);
+  assert.equal(full.files?.length, 1, full.content);
+  assert.deepEqual(rows(full.files[0].attachment), [[thirteen.productOrderId, fifteen.trackingNumber], ...pairs([fifteen, ...ordinary])]);
+  const fromWeb = await post('additional-files', { expectedVersion: latest.viewVersion, mode: 'all', productOrderIds: null });
+  const saved = await app.request(invoicePath(runId) + '/additional-files/' + fromWeb.file.id);
+  assert.deepEqual(Buffer.from(await saved.arrayBuffer()), full.files[0].attachment);
+}
+
+test('수취인·상품으로 찾은 합포장 확정과 등록 조회, 미등록 추가 파일과 전체 파일을 조합한다', async t => {
+  await testCombinedRequest(t);
+});
+
+test('실제 모델이 가상 주문의 합포장·조회·추가 파일 요청에 도구를 조합한다', { skip: !process.env.SYSTEM0_TEST_AGENT_ENV, timeout: 180000 }, async t => {
+  await testCombinedRequest(t, true);
+});
 
 test('날짜·수취인·원송장으로 지정한 한 건만 선택창에 표시하고 다른 미선택 출고를 적용하지 않는다', async t => {
   const a = order(1, { recipient: '이테스트', trackingNumber: '99000014043' });
