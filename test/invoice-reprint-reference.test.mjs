@@ -4,7 +4,7 @@ import * as XLSX from 'xlsx';
 import { openDatabase } from '../lib/database.mjs';
 import { importFiles } from '../lib/excel.mjs';
 import * as invoices from '../lib/invoices.mjs';
-import { courierFile, naverFile, sourceFile } from './fixtures/weekend-invoices.mjs';
+import { courierFile, naverFile, registeredOrder, sourceFile } from './fixtures/weekend-invoices.mjs';
 
 const day = '2026-11-23';
 const fixtureOrder = index => ({
@@ -82,6 +82,41 @@ test('기존 보관 엑셀과 명시 보류·제외는 번호 선택 후에도 �
   const next = invoices.prepareInvoiceFile(db, detail.run.id, { mode: 'export', expectedVersion: view().viewVersion });
   assert.deepEqual(exportedNumbers(next), [orders[0].trackingNumber, orders[2].trackingNumber]);
   assert.deepEqual(invoices.downloadInvoices(db, detail.run.id).buffer, saved);
+});
+
+test('등록 확인된 재출력을 확정하면 번호가 바뀐 건만 재조회하고 기존 재출력 보류는 일치한 주문의 색에 영향을 주지 않는다', async t => {
+  const orders = Array.from({ length: 5 }, (_, index) => fixtureOrder(index));
+  const { db, detail, view, choose } = setup(t, orders);
+  const note = '원송장과 새 송장의 연결·출력 순서가 불명확하여 이번 작업에서 보류';
+  const manualNote = '별도 고객 요청으로 보류';
+  const refresh = () => invoices.refreshInvoiceStatus(db, detail.run.id, {
+    queryProductOrders: async () => orders.map(order => registeredOrder(order)),
+  });
+  invoices.reviseInvoiceItems(db, detail.run.id, {
+    changes: detail.items.map((item, index) => ({ id: item.id, decision: 'hold', note: index === 4 ? manualNote : note })),
+    issueResolutions: detail.issues.filter(issue => issue.kind === 'reprint_uncertain').map(issue => ({ key: issue.key, note })),
+  });
+  await refresh();
+  const before = view();
+  assert.ok(before.items.every(item => item.registrationState === 'complete' && item.statusFresh));
+  const choices = before.trackingReview.groups.map((group, index) => ({ key: group.key, mode: 'replace',
+    trackingNumber: index < 2 ? group.originalTrackingNumber : group.reprintTrackingNumber, ...(index < 2 ? { acknowledgeOriginal: true } : {}) }));
+  const after = choose(choices);
+  assert.deepEqual(after.items.map(item => item.registrationState), ['unchecked', 'unchecked', 'complete', 'complete', 'complete']);
+  assert.deepEqual(after.items.map(item => item.checkedAt), [null, null, ...before.items.slice(2).map(item => item.checkedAt)]);
+  assert.deepEqual(after.currentOrders.map(order => order.state), ['hold', 'hold', 'complete', 'complete', 'hold']);
+  assert.deepEqual(after.items.map(item => item.decision), Array(5).fill('hold'));
+  assert.deepEqual(after.items.map(item => item.note), [note, note, note, note, manualNote]);
+
+  // Older saves reset the status even when the applied number stayed the same.
+  const reset = db.prepare(`UPDATE invoice_items SET registration_state = 'unchecked',
+    status_json = json_set(status_json, '$.checkedAt', status_checked_at), status_checked_at = NULL
+    WHERE id = ?`);
+  for (const item of after.items.slice(2, 4)) reset.run(item.id);
+  await refresh();
+  const checked = view();
+  assert.deepEqual(checked.items.map(item => item.registrationState), ['conflict', 'conflict', 'complete', 'complete', 'complete']);
+  assert.deepEqual(checked.currentOrders.map(order => order.state), ['attention', 'attention', 'complete', 'complete', 'hold']);
 });
 
 test('원송장 번호가 다른 출고에 있거나 수취인이 다르면 직원 선택으로 우회하지 않는다', async t => {

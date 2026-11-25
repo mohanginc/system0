@@ -166,6 +166,13 @@ main.invoice-layout.history-collapsed { display: grid; grid-template-columns: 18
 .check-registration .registration-result { font-size: 13px; font-weight: 600; color: var(--navy); }
 .check-registration .registration-result.is-error { color: #983757; }
 .invoices-page footer { max-width: 1760px; margin-top: 24px; padding-inline: 28px; }
+@media (max-width: 1140px) {
+  .history-collapsed .result-section .invoice-table { min-width: 780px; }
+  .history-collapsed .result-section .invoice-table th,
+  .history-collapsed .result-section .invoice-table td { padding-inline: 10px; }
+  .history-collapsed .result-section .invoice-table th:nth-child(2) { width: 26%; }
+  .history-collapsed .result-section .invoice-table th:last-child { width: 15%; }
+}
 @media (max-width: 1100px) {
   main.invoice-layout { grid-template-columns: 180px minmax(0, 1fr); gap: 16px; padding-inline: 20px; }
   .import-actions { flex-wrap: wrap; }

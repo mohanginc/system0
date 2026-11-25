@@ -24,6 +24,7 @@ const item = (view, product) => view.items.find(row => row.productOrderId === pr
 const rows = bytes => XLSX.utils.sheet_to_json(XLSX.read(Buffer.from(bytes), { type: 'buffer' }).Sheets['발송처리'], { header: 1 })
   .slice(1).map(row => [row[0], row[3]]);
 const pairs = orders => orders.map(value => [value.productOrderId, value.trackingNumber]);
+const components = output => (output.components || []).flatMap(row => row.components || []);
 
 async function boot(t, originalOrders, remoteOrders = originalOrders) {
   const toolRequests = [], webCalls = [], naverCalls = [];
@@ -109,6 +110,60 @@ async function boot(t, originalOrders, remoteOrders = originalOrders) {
     .run(date + 'T' + time + ':00.000Z', runId);
   return { event, run, start, get, file, select, save, check, setGeneratedAt, setCreatedAt, webCalls, naverCalls, toolRequests };
 }
+
+test('날짜·수취인·원송장으로 지정한 한 건만 선택창에 표시하고 다른 미선택 출고를 적용하지 않는다', async t => {
+  const a = order(1, { recipient: '이테스트', trackingNumber: '99000014043' });
+  const orders = [a, ...[2, 3, 4].map(index => order(index, { recipient: `가상 수취인 ${index}` }))];
+  const reprints = orders.map((product, index) => ({ ...product, originalTrackingNumber: product.trackingNumber,
+    trackingNumber: String(99000015043 + index), issueCount: 2, printedAt: '16:28:17' }));
+  const s = await boot(t, orders);
+  const previous = await s.start(orders.slice(1), reprints.slice(1));
+  const started = await s.start(orders, reprints), runId = started.run.id;
+  const last = started.trackingReview.groups.find(group => group.productOrderIds.includes(orders[3].productOrderId));
+  await s.select(started, [{ key: last.key, mode: 'replace', trackingNumber: reprints[3].trackingNumber }]);
+  const before = await s.get(runId), target = before.trackingReview.groups.find(group => group.productOrderIds.includes(a.productOrderId));
+  assert.equal(before.trackingReview.pendingCount, 3);
+  const requested = `23일 송장에서 ${a.recipient} 송장을 ${a.trackingNumber}으로 바꿔줘`;
+  const output = await s.run(requested, [
+    tool('list_invoice_runs', { date }),
+    tool('read_invoice', { runId: previous.run.id }),
+    tool('read_invoice', { runId }),
+    tool('review_invoice_tracking', { runId, bulkReplacement: false }),
+    result => { assert.equal(result.trackingRows.length, 1); return '실제 상자에 붙은 라벨을 확인해 선택해 주세요.'; },
+  ]);
+  const menus = components(output).filter(component => component.type === 3);
+  assert.equal(menus.length, 1, output.content);
+  assert.equal(menus[0].placeholder, `${a.recipient} 적용 송장 선택`);
+  assert.deepEqual(menus[0].options.map(option => option.value), [`original:${a.trackingNumber}`, `replace:${reprints[0].trackingNumber}`]);
+  assert.equal(components(output).some(component => component.label === '이번 파일의 송장으로 교체'), false);
+  assert.equal(s.webCalls.filter(call => call.route.endsWith('/tracking')).length, 0);
+  const sourceMessageId = '900000000000000028';
+  const staged = await s.run('', [], { kind: 'component', sourceMessageId, buttonId: menus[0].custom_id, values: [`original:${a.trackingNumber}`] });
+  assert.equal(components(staged).filter(component => component.type === 3).length, 1);
+  const apply = components(staged).find(component => component.label === '선택 적용');
+  assert.ok(apply, staged.content); assert.equal(Boolean(apply.disabled), false);
+  const applied = await s.run('', [], { kind: 'component', sourceMessageId, buttonId: apply.custom_id });
+  assert.equal(applied.files, undefined);
+  const writes = s.webCalls.filter(call => call.route.endsWith('/tracking'));
+  assert.equal(writes.length, 1);
+  assert.deepEqual(writes[0].body.choices, [{ key: target.key, trackingNumber: a.trackingNumber, mode: 'replace', acknowledgeOriginal: true }]);
+  const after = await s.get(runId);
+  assert.equal(item(after, a).trackingNumber, a.trackingNumber);
+  assert.equal(after.trackingReview.pendingCount, 2);
+  assert.deepEqual(after.items.filter(value => value.productOrderId !== a.productOrderId), before.items.filter(value => value.productOrderId !== a.productOrderId));
+  assert.equal(components(applied).filter(component => component.type === 3).length, 0);
+
+  for (const text of [
+    `상품주문번호 ${a.productOrderId}의 송장을 ${reprints[1].trackingNumber}로 바꿔줘`,
+    `없는고객 송장을 ${reprints[1].trackingNumber}으로 바꿔줘`,
+  ]) {
+    const rejected = await s.run(text, [tool('read_invoice', { runId }), tool('review_invoice_tracking', { runId, bulkReplacement: false }),
+      result => { assert.equal(result.ok, false); return '변경 대상을 확인해 주세요.'; }]);
+    assert.equal(components(rejected).some(component => component.type === 3), false);
+  }
+  assert.equal(s.webCalls.filter(call => call.route.endsWith('/tracking')).length, 1);
+  assert.equal((await s.get(runId)).viewVersion, after.viewVersion);
+});
 
 test('상품주문번호로 찾은 분리 배송 건을 비교·정정·재조회하면 웹에도 같은 상품만 변경됩니다', async t => {
   const a = order(1), b = order(2, { orderId: a.orderId });
