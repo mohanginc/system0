@@ -304,10 +304,6 @@ function sourceDescription(item) {
   if (item.orderId) lines.push(`네이버 주문번호: ${item.orderId}`);
   if (item.internalId) lines.push(`내부 출고번호: ${item.internalId}`);
   for (const source of item.sourceRows || []) lines.push(sourceLocation(source));
-  for (const issueKey of item.issues || []) {
-    const issue = current.issues.find(value => value.key === issueKey);
-    if (issue) lines.push(issue.message);
-  }
   return lines.join('\n');
 }
 function matchClass(state) {
@@ -324,8 +320,15 @@ function matchLabel(state) {
     invalid_id: '연결 번호 확인 필요', missing_courier: '대응 송장 없음', missing_naver: '네이버 자료 없음', outside_scope: '선택한 작업에 없음',
     missing_saved_order: '확인한 주문 자료 없음', unsupported_mall: '미지원 몰 확인 필요', source_deleted: '원본 자료 없음', not_matched: '송장 매칭 전', not_targeted: '최근 네이버 파일의 대상 아님', conflict: '충돌·판단 필요' }[state] || '확인 필요';
 }
-function appendRegistrationComparison(target, appliedTrackingNumber, remote) {
+function appendRegistrationComparison(target, appliedTrackingNumber, remote, perProduct = false) {
   if (!remote) return;
+  if (!perProduct) {
+    if (!remote.fresh || remote.trackingNumber !== appliedTrackingNumber) {
+      target.append(element('small', `네이버: ${remote.trackingNumber || '미등록'}`));
+    }
+    if (!remote.fresh) target.append(element('small', `이전 조회${remote.checkedAt ? ' ' + formatTime(remote.checkedAt) : ''}`));
+    return;
+  }
   target.append(element('small', `system0: ${appliedTrackingNumber || '미선택'}`), element('small', `네이버: ${remote.trackingNumber || '미등록'}`));
   if (remote.fresh && typeof remote.matches === 'boolean') target.append(element('small', remote.matches ? '송장 일치'
     : remote.trackingNumber && remote.trackingNumber === appliedTrackingNumber ? '택배사 다름' : '송장 다름'));
@@ -345,11 +348,12 @@ function reviewControls(original) {
   note.addEventListener('input', () => saveItemDraft(original, { note: note.value }));
   group.append(decision, note); return group;
 }
-function shipmentHistory(items) {
+function shipmentHistory(items, courierRows = []) {
   const shipments = new Map();
   for (const item of items) for (const shipment of item.physicalShipments || []) if (!shipments.has(shipment.trackingNumber)) shipments.set(shipment.trackingNumber, shipment);
-  if (!shipments.size) return null;
-  const history = element('details'); history.append(element('summary', `전체 송장 이력 ${count(shipments.size)}건`));
+  if (!shipments.size && !courierRows.length) return null;
+  const history = element('details'), shown = new Set();
+  history.append(element('summary', shipments.size ? '송장 이력' : '송장 원본'));
   for (const shipment of shipments.values()) {
     const lines = [`${shipment.trackingNumber} · ${shipment.valid === true ? '유효' : shipment.valid === false ? '이전 송장' : '유효 여부 확인 필요'}`];
     if (shipment.round) lines.push(`차수 ${shipment.round}`);
@@ -357,8 +361,18 @@ function shipmentHistory(items) {
     if (shipment.issueCount !== null && shipment.issueCount !== undefined) lines.push(`발행횟수 ${shipment.issueCount}`);
     if (shipment.printedAt) lines.push(`출력 ${shipment.printedAt}`);
     if (shipment.replacedBy) lines.push(`교체 송장 ${shipment.replacedBy}`);
-    for (const source of shipment.sources || []) lines.push(sourceLocation(source));
+    for (const source of shipment.sources || []) {
+      const location = sourceLocation(source);
+      shown.add(JSON.stringify([shipment.trackingNumber, location]));
+      lines.push(location);
+    }
     history.append(element('p', lines.join('\n')));
+  }
+  for (const source of courierRows) {
+    const location = sourceLocation(source);
+    if (!shown.has(JSON.stringify([source.trackingNumber, location]))) {
+      history.append(element('p', [source.trackingNumber, location].filter(Boolean).join('\n')));
+    }
   }
   return history;
 }
@@ -389,13 +403,23 @@ function trackingChoices(order, linked) {
   for (const group of groups) {
     const assignment = group.kind === 'assignment';
     const reference = group.kind === 'reprint_reference';
-    if (!group.needsSelection && !(group.mode === 'split' && group.splitEligible) && !(assignment && group.assignEligible)) {
-      const selected = group.selectedTrackingNumber || linked.find(item => group.itemIds.includes(item.id))?.trackingNumber || order.trackingNumbers[0] || '';
+    const selected = group.selectedTrackingNumber || linked.find(item => group.itemIds.includes(item.id))?.trackingNumber || order.trackingNumbers[0] || '';
+    const eligible = candidate => reference ? group.replaceEligible && candidate.selectable
+      : candidate.valid === true && candidate.selectable !== false && (assignment ? group.assignEligible
+        : group.splitEligible || group.replaceEligible && candidate.currentFile);
+    let editor = container;
+    if (!group.needsSelection) {
       container.append(element('strong', selected));
-      if (group.mode) container.append(element('small', group.mode === 'assign' ? '분리 배송' : group.mode === 'replace' ? '교체 적용' : '분할 상자 · 대표 송장'));
-      continue;
+      if (group.mode === 'split' || assignment) container.append(element('small', assignment ? '분리 배송' : '분할 대표'));
+      if (!group.candidates.some(candidate => candidate.trackingNumber !== selected && eligible(candidate))) continue;
+      editor = element('details', undefined, 'tracking-edit');
+      editor.open = trackingChanges.has(group.key);
+      editor.append(element('summary', '송장 수정'));
+      container.append(editor);
     }
     const draft = { trackingNumber: group.selectedTrackingNumber || '', mode: group.mode || '', ...trackingChanges.get(group.key) };
+    const registered = new Set(linked.filter(item => group.itemIds.includes(item.id) && item.naverRegistration?.fresh
+      && item.naverRegistration.carrierCode === current.run.carrierCode).map(item => item.naverRegistration.trackingNumber));
     const controls = element('div', undefined, 'tracking-review-choice'), numberLabel = element('label', '적용 송장'), number = element('select');
     number.setAttribute('aria-label', `${order.recipient || group.internalId} 적용 송장`);
     number.add(new Option('송장 선택', ''));
@@ -403,7 +427,8 @@ function trackingChoices(order, linked) {
       const role = candidate.role === 'original' ? candidate.referenceOnly ? '원송장 (번호만 있음)' : '원송장'
         : candidate.role === 'reprint' ? '재출력 송장' : '';
       const label = [role, candidate.trackingNumber, candidate.round ? `${candidate.round}차` : '', candidate.printedAt
-        ? /^\d{2}:\d{2}:\d{2}$/.test(candidate.printedAt) ? candidate.printedAt : formatTime(candidate.printedAt) : ''].filter(Boolean).join(' · ');
+        ? /^\d{2}:\d{2}:\d{2}$/.test(candidate.printedAt) ? candidate.printedAt : formatTime(candidate.printedAt) : '',
+        registered.size === 1 && registered.has(candidate.trackingNumber) ? '네이버 등록' : ''].filter(Boolean).join(' · ');
       const option = new Option(label, candidate.trackingNumber);
       option.disabled = reference ? !candidate.selectable : candidate.valid === false || candidate.selectable === false;
       number.add(option);
@@ -422,13 +447,13 @@ function trackingChoices(order, linked) {
         label.append(check, element('span', '상자에 붙인 원송장을 확인했습니다.')); controls.append(label);
       }
       if (group.reason && group.needsSelection) controls.append(element('small', group.reason, 'match-reason'));
-      container.append(controls);
+      editor.append(controls);
       continue;
     }
     if (assignment) {
       controls.append(element('small', '분리 배송'));
       if (group.reason && group.needsSelection) controls.append(element('small', group.reason, 'match-reason'));
-      container.append(controls);
+      editor.append(controls);
       continue;
     }
     const modeLabel = element('label', '송장 처리'), mode = element('select');
@@ -442,7 +467,7 @@ function trackingChoices(order, linked) {
     mode.addEventListener('change', () => saveTrackingDraft(group, { mode: mode.value }));
     modeLabel.append(mode); controls.append(modeLabel);
     if (group.reason && group.needsSelection) controls.append(element('small', group.reason, 'match-reason'));
-    container.append(controls);
+    editor.append(controls);
   }
   return container;
 }
@@ -470,11 +495,14 @@ function renderItems() {
     row.classList.toggle('combined-order', linked.length > 1);
     const recipient = element('td'); recipient.append(element('strong', order.recipient || '수취인 정보 없음')); if (order.phone) recipient.append(element('small', order.phone));
     for (const item of linked) recipient.append(element('small', item.productOrderId));
-    const location = [order.source?.sourceFile, [order.source?.sourceSheet, order.source?.sourceRow !== undefined ? `${order.source.sourceRow}행` : ''].filter(Boolean).join(' ')].filter(Boolean).join(' · ');
     const product = element('td'); product.append(element('strong', order.cleanedName || order.originalName || '상품명 미정리'));
     if (['naver_only', 'saved_product'].includes(order.sourceType) && order.optionName && order.optionName !== order.cleanedName) product.append(element('small', `선택 옵션: ${order.optionName}`));
-    product.append(element('small', `${order.sourceType === 'naver_only' ? '① ' : '② '}${location}`, 'source-location'));
-    const details = element('details'); details.append(element('summary', '주문 연결 근거'), element('p', [...new Set(linked.map(sourceDescription))].filter(Boolean).join('\n') || (order.internalId ? `내부 출고번호: ${order.internalId}` : order.reason || '연결된 자료가 없습니다.'))); product.append(details);
+    const location = sourceLocation(order.source);
+    const sources = [...new Set(linked.map(sourceDescription))].filter(Boolean);
+    if (location && !sources.some(source => source.includes(location))) sources.push(location);
+    const details = element('details');
+    details.append(element('summary', '주문 원본'), element('p', sources.join('\n') || (order.internalId ? `내부 출고번호: ${order.internalId}` : order.reason || '연결된 자료가 없습니다.')));
+    product.append(details);
     if (readonly && order.originalOrder) {
       const original = order.originalOrder, history = element('details'); history.append(element('summary', '당시 매칭 이력'));
       const warnings = current.issues.filter(issue => (original.issues || []).includes(issue.key));
@@ -485,12 +513,7 @@ function renderItems() {
     if (readonly) for (const number of order.trackingNumbers) tracking.append(element('strong', number));
     else tracking.append(trackingChoices(order, linked));
     if (!order.trackingNumbers.length) tracking.append(element('span', order.state === 'not_matched' ? '송장 매칭 전' : '대응 송장 없음'));
-    if (order.courierRows?.length) {
-      const sources = element('details'); sources.append(element('summary', '③ 송장 원본 위치'));
-      for (const source of order.courierRows) sources.append(element('p', [source.trackingNumber ? `송장번호: ${source.trackingNumber}` : '', sourceLocation(source)].filter(Boolean).join('\n')));
-      tracking.append(sources);
-    }
-    const history = shipmentHistory(linked); if (history) tracking.append(history);
+    const history = shipmentHistory(linked, order.courierRows); if (history) tracking.append(history);
     const review = element('td');
     if (readonly) {
       const latest = order.latestStatus || {};
@@ -500,15 +523,25 @@ function renderItems() {
       }
       if (order.reason && !['ready', 'complete', 'external_registered'].includes(order.state)) review.append(element('small', order.reason, 'match-reason'));
     } else {
-    if (!['ready', 'complete'].includes(order.state)) review.append(element('span', matchLabel(order.state), `match-state ${matchClass(order.state)}`));
-    const warnings = warningsForOrder(order);
-    if (order.reason && !warnings.length && !['ready', 'complete'].includes(order.state)) review.append(element('small', order.reason, 'match-reason'));
-    for (const item of linked) {
-      if (linked.length > 1) review.append(element('small', `상품주문번호 ${item.productOrderId}`));
-      review.append(reviewControls(item));
-    }
-    appendWarnings(review, warnings);
-    if (!linked.length && order.state === 'not_matched') review.append(element('small', '아직 이 주문에 송장을 매칭하지 않았습니다.'));
+      const registrationConcern = linked.some(item => item.registrationState === 'conflict' || item.registrationRecheck && !item.statusFresh);
+      const warnings = warningsForOrder(order).filter(issue => issue.kind !== 'registration_recheck' || !registrationConcern);
+      const active = warnings.filter(issue => !issue.resolved || issue.blocking);
+      const recorded = warnings.filter(issue => issue.resolved && !issue.blocking);
+      const showReason = !['ready', 'complete'].includes(order.state) && (!registrationConcern || active.length);
+      if (showReason) review.append(element('span', matchLabel(order.state), `match-state ${matchClass(order.state)}`));
+      if (showReason && !warnings.length && order.reason) review.append(element('small', order.reason, 'match-reason'));
+      if (linked.length || recorded.length) {
+        const reviewDetails = element('details');
+        reviewDetails.open = linked.some(item => itemChanges.has(String(item.id))) || recorded.some(issue => issueChanges.has(issue.key));
+        reviewDetails.append(element('summary', '검토 내역'));
+        for (const item of linked) {
+          if (linked.length > 1) reviewDetails.append(element('small', `상품주문번호 ${item.productOrderId}`));
+          reviewDetails.append(reviewControls(item));
+        }
+        appendWarnings(reviewDetails, recorded);
+        review.append(reviewDetails);
+      }
+      appendWarnings(review, active);
     }
     const registration = element('td');
     if (readonly) {
@@ -519,18 +552,22 @@ function renderItems() {
       if (!products.length && order.latestStatus?.checkedAt) registration.append(element('small', `조회 ${formatTime(order.latestStatus.checkedAt)}`));
       for (const product of products) {
         if (products.length > 1) registration.append(element('small', product.productOrderId));
-        appendRegistrationComparison(registration, product.appliedTrackingNumber, product.naverRegistration);
+        appendRegistrationComparison(registration, product.appliedTrackingNumber, product.naverRegistration, products.length > 1);
       }
     } else {
-    for (const item of linked) {
-      const state = item.registrationState || 'unchecked';
-      if (linked.length > 1) registration.append(element('small', item.productOrderId));
-      registration.append(element('span', registrationLabels[state] || '확인 필요', `registration-badge ${state === 'complete' ? 'registered' : state}`));
-      appendRegistrationComparison(registration, item.trackingNumber, item.naverRegistration);
-      if (item.registrationNote) registration.append(element('small', item.registrationNote));
-      if (item.sourceRegistered && state !== 'complete') registration.append(element('small', '원본에 동일 송장 있음 · 중복 다운로드 제외'));
-    }
-    if (!linked.length) registration.append(element('small', order.state === 'not_matched' ? '매칭 전' : '등록 대상 미연결'));
+      for (const item of linked) {
+        const state = item.registrationState || 'unchecked', remote = item.naverRegistration;
+        const carrierMismatch = remote?.fresh && remote.matches === false && remote.trackingNumber === item.trackingNumber;
+        const label = state === 'conflict' && carrierMismatch ? '택배사 불일치'
+          : state === 'unchecked' && item.registrationRecheck ? '등록 재확인 필요' : registrationLabels[state] || '확인 필요';
+        if (linked.length > 1) registration.append(element('small', item.productOrderId));
+        registration.append(element('span', label, `registration-badge ${state === 'complete' ? 'registered' : state}`));
+        appendRegistrationComparison(registration, item.trackingNumber, remote, linked.length > 1);
+        const onlyTrackingConflict = item.registrationProblems?.length === 1 && item.registrationProblems[0] === 'tracking_conflict';
+        if (state === 'conflict' && item.registrationNote && !onlyTrackingConflict) registration.append(element('small', item.registrationNote));
+        if (item.sourceRegistered && state !== 'complete') registration.append(element('small', '원본에 동일 송장 있음 · 중복 다운로드 제외'));
+      }
+      if (!linked.length) registration.append(element('small', order.state === 'not_matched' ? '매칭 전' : '등록 대상 미연결'));
     }
     row.append(recipient, product, tracking, review, registration); fragment.append(row);
     }

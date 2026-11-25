@@ -127,6 +127,8 @@ main.invoice-layout.history-collapsed { display: grid; grid-template-columns: 18
 .match-legend .needs-review, .match-state.needs-review { background: #f2ecfb; color: #6d448f; }
 .tracking-review-controls { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 10px 20px; border-bottom: 1px solid #e5e5e2; font-size: 12px; }
 .tracking-review-choice { display: grid; gap: 6px; margin-bottom: 6px; }
+.invoice-table .tracking-edit > summary { color: var(--navy); text-decoration: underline; text-underline-offset: 2px; }
+.tracking-edit[open] .tracking-review-choice { margin-top: 8px; }
 .tracking-review-choice label { display: grid; gap: 4px; font-size: 11px; }
 .tracking-review-choice .tracking-reference-check { display: flex; align-items: center; }
 .tracking-review-choice select { width: 100%; max-width: 270px; font-size: 12px; }

@@ -28,7 +28,8 @@ function harness(initial = detail()) {
   const nodes = new Map(), calls = [], confirms = [];
   const getNode = id => { if (!nodes.has(id)) nodes.set(id, new Node()); return nodes.get(id); };
   const context = vm.createContext({ console, URL, URLSearchParams, AbortSignal, setTimeout, clearTimeout,
-    document: { getElementById: getNode, createElement: tag => new Node(tag), createDocumentFragment: () => new Node('fragment'), querySelectorAll: () => [] },
+    document: { getElementById: getNode, createElement: tag => new Node(tag), createTextNode: text => Object.assign(new Node('#text'), { textContent: text }),
+      createDocumentFragment: () => new Node('fragment'), querySelectorAll: () => [] },
     window: { location: { search: '' }, addEventListener() {}, confirm: text => { confirms.push(text); return true; } },
     Option: class extends Node { constructor(text, value) { super('option'); this.textContent = text; this.value = value; } },
     fetch: () => new Promise(() => {}), fixture: initial,
@@ -246,6 +247,33 @@ test('네이버 등록 후에도 정정 가능한 분리 배송 송장을 웹에
   }
 });
 
+test('확정한 재출력은 송장 수정에서 네이버 번호를 골라 해당 출고만 저장할 수 있다', async () => {
+  const [original, reprint] = ['001234567001', '001234567002'];
+  const group = reviewGroup({ kind: 'reprint_reference', needsSelection: false, mode: 'replace', selectedTrackingNumber: original,
+    replaceEligible: true, replacementEligible: false, itemIds: [1],
+    candidates: [{ trackingNumber: original, role: 'original', referenceOnly: true, selectable: true },
+      { trackingNumber: reprint, role: 'reprint', selectable: true }] });
+  const initial = detail({ trackingReview: { groups: [group], pendingCount: 0 } });
+  initial.run.carrierCode = 'KGB';
+  initial.items[0].naverRegistration = { trackingNumber: reprint, carrierCode: 'KGB', fresh: true, matches: false };
+  const h = harness(initial);
+  const controls = () => h.run("trackingChoices({recipient:'모의 수취인',trackingNumbers:['001234567001']},[current.items[0]])");
+  const edit = descendants(controls()).find(node => node.className === 'tracking-edit');
+  assert.equal(edit.open, false);
+  assert.equal(edit.children[0].textContent, '송장 수정');
+  const select = descendants(edit).find(node => node.tagName === 'select');
+  assert.ok(select.children.some(option => option.value === reprint && option.textContent.endsWith('네이버 등록')));
+  select.value = reprint;
+  select.listeners.get('change')();
+  assert.equal(descendants(controls()).find(node => node.className === 'tracking-edit').open, true);
+  await h.run('saveReview()');
+  assert.deepEqual(h.calls, [{ url: '/api/invoices/8/tracking', body: { expectedVersion: 'version-1',
+    choices: [{ key: group.key, trackingNumber: reprint, mode: 'replace' }] } }]);
+
+  group.candidates[1].selectable = false;
+  assert.ok(!descendants(controls()).some(node => node.className === 'tracking-edit'));
+});
+
 test('하나의 내부 출고를 재출력한 경우는 두 상품행의 선택을 계속 연동한다', () => {
   const h = harness();
   const first = h.run("trackingChoices({recipient:'모의 수취인',trackingNumbers:[]},[current.items[0]])");
@@ -309,17 +337,17 @@ function registrationView(item, changes = {}) {
   return descendants(row.children[4]).map(node => node.textContent || '').filter(Boolean);
 }
 
-test('등록 상태에서 system0 적용 번호와 네이버 조회 번호를 비교하고 미조회·이전 조회를 구분한다', () => {
+test('단독 행 등록 상태는 번호 중복 없이 불일치·이전 조회를 구분한다', () => {
   const item = { id: 1, productOrderId: 'mock-product-1', trackingNumber: '45500000001', decision: 'include',
     registrationState: 'unchecked', issues: [], blockingIssueKeys: [] };
   const remote = { trackingNumber: '45500000002', carrierCode: 'KGB', status: 'DELIVERING', checkedAt: '2026-11-16T03:24:00Z', fresh: true, matches: false };
-  const mismatch = registrationView({ ...item, naverRegistration: remote });
-  assert.ok(mismatch.includes('system0: 45500000001')); assert.ok(mismatch.includes('네이버: 45500000002'));
-  assert.ok(mismatch.includes('송장 다름'));
-  const same = registrationView({ ...item, naverRegistration: { ...remote, trackingNumber: item.trackingNumber, matches: true } });
-  assert.ok(same.includes('송장 일치')); assert.ok(!same.includes('송장 다름'));
-  const wrongCarrier = registrationView({ ...item, naverRegistration: { ...remote, trackingNumber: item.trackingNumber, carrierCode: 'OTHER' } });
-  assert.ok(wrongCarrier.includes('택배사 다름')); assert.ok(!wrongCarrier.includes('송장 다름'));
+  const mismatch = registrationView({ ...item, registrationState: 'conflict', naverRegistration: remote });
+  assert.deepEqual(mismatch, ['송장 불일치', '네이버: 45500000002']);
+  const same = registrationView({ ...item, registrationState: 'complete', naverRegistration: { ...remote, trackingNumber: item.trackingNumber, matches: true } });
+  assert.deepEqual(same, ['등록 확인 완료']);
+  const wrongCarrier = registrationView({ ...item, registrationState: 'conflict',
+    naverRegistration: { ...remote, trackingNumber: item.trackingNumber, carrierCode: 'OTHER' } });
+  assert.deepEqual(wrongCarrier, ['택배사 불일치']);
   const unchecked = registrationView({ ...item, naverRegistration: null });
   assert.deepEqual(unchecked, ['등록 미조회']);
   const stale = registrationView({ ...item, naverRegistration: { ...remote, fresh: false, matches: null } });
@@ -327,6 +355,27 @@ test('등록 상태에서 system0 적용 번호와 네이버 조회 번호를 �
   assert.ok(stale.includes('네이버: 45500000002')); assert.ok(!stale.some(value => ['송장 일치', '송장 다름'].includes(value)));
   const missing = registrationView({ ...item, naverRegistration: { ...remote, trackingNumber: '', matches: null } });
   assert.ok(missing.includes('네이버: 미등록')); assert.ok(!missing.includes('송장 다름'));
+});
+
+test('확인한 경고는 검토 내역에 접고 처리가 필요한 경고는 행에 표시한다', () => {
+  const issues = [
+    { key: 'old', kind: 'reprint_uncertain', message: '이전 재출력 경고', resolved: true, blocking: true, note: '라벨 확인' },
+    { key: 'active', kind: 'recipient_mismatch', message: '수취 정보 확인 필요', resolved: false, blocking: true, note: '' },
+  ];
+  const item = { id: 1, productOrderId: 'mock-product-1', trackingNumber: '45500000001', decision: 'hold',
+    registrationState: 'conflict', issues: ['old', 'active'], blockingIssueKeys: ['active'] };
+  const order = { key: 'product-1', sourceType: 'naver_only', itemIds: [1], issues: item.issues,
+    cleanedName: '검증 쿠션', trackingNumbers: [item.trackingNumber], state: 'attention' };
+  const h = harness(detail({ items: [item], orders: [order], issues, trackingReview: { groups: [], pendingCount: 0 } }));
+  h.run("renderOutsideTarget = () => {}; renderUnmatched = () => {}; $('item-filter').value = 'all'; renderItemsForTest();");
+  const row = descendants(h.nodes.get('item-rows')).find(node => node.tagName === 'tr' && node.children[0]?.tagName === 'td');
+  const review = row.children[3];
+  const details = review.children.find(node => node.tagName === 'details');
+  assert.equal(details.open, false);
+  assert.ok(descendants(details).some(node => node.textContent === '이전 재출력 경고'));
+  assert.ok(!descendants(details).some(node => node.textContent === '수취 정보 확인 필요'));
+  assert.ok(review.children.some(node => node.className === 'record-warning'
+    && descendants(node).some(child => child.textContent === '수취 정보 확인 필요')));
 });
 
 test('이전 날짜의 조회 전용 행에서도 최신 상품주문별 적용 송장과 네이버 번호를 비교한다', () => {
