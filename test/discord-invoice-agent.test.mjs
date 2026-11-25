@@ -133,6 +133,7 @@ test('날짜·수취인·원송장으로 지정한 한 건만 선택창에 표�
   ]);
   const menus = components(output).filter(component => component.type === 3);
   assert.equal(menus.length, 1, output.content);
+  assert.ok(output.content.includes(`${a.recipient} (${a.productOrderId})`), output.content);
   assert.equal(menus[0].placeholder, `${a.recipient} 적용 송장 선택`);
   assert.deepEqual(menus[0].options.map(option => option.value), [`original:${a.trackingNumber}`, `replace:${reprints[0].trackingNumber}`]);
   assert.equal(components(output).some(component => component.label === '이번 파일의 송장으로 교체'), false);
@@ -201,9 +202,11 @@ test('상품주문번호로 찾은 분리 배송 건을 비교·정정·재조�
 
 test('네이버 발송 대상 밖의 같은 출고 건은 저장 주문과 로젠 원본 위치를 한 항목에 보여줍니다', async t => {
   const naverOrder = order(1);
-  const outside = order(2, { orderId: '20261116-0000002', productName: '[coupang] 가상 제품 2' });
+  const outside = order(2, { orderId: '20261116-0000002', productName: '[coupang] 가상 제품 2', recipient: '가상참고인' });
+  const courierOnly = order(3, { internalId: '', recipient: '가상택배인' });
+  const unnamed = order(4, { internalId: '', recipient: '' });
   const s = await boot(t, [naverOrder, outside], [naverOrder]);
-  const before = await s.start([naverOrder], [naverOrder, outside]), runId = before.run.id;
+  const before = await s.start([naverOrder], [naverOrder, outside, courierOnly, unnamed]), runId = before.run.id;
   assert.equal(before.currentOutsideOrders.find(row => row.orderId === outside.orderId)?.internalId, outside.internalId);
   assert.equal(before.unmatchedCouriers.find(row => row.trackingNumber === outside.trackingNumber)?.internalId, outside.internalId);
 
@@ -221,11 +224,15 @@ test('네이버 발송 대상 밖의 같은 출고 건은 저장 주문과 로�
       assert.equal(note.registration, '이번 네이버 발송 대상에 없어 등록 여부는 조회하지 않았습니다.');
       const { file, row, trackingNumber } = note.courierSources[0];
       return `저장 주문 엑셀 ${note.savedOrderSource.file} ${note.savedOrderSource.row}행의 체결번호 ${note.orderId}와 `
-        + `로젠 송장 엑셀 ${file} ${row}행의 송장번호 ${trackingNumber}는 같은 출고 건입니다. ${note.registration}`;
+        + `로젠 송장 엑셀 ${file} ${row}행의 송장번호 ${trackingNumber}는 같은 출고 건입니다. ${note.registration}\n`
+        + `택배 엑셀에만 있는 송장 \`${courierOnly.trackingNumber}\`, \`${unnamed.trackingNumber}\``;
     },
   ]);
   assert.match(output.content, /저장 주문 엑셀.*3행의 체결번호.*로젠 송장 엑셀.*3행의 송장번호.*같은 출고 건/);
   assert.match(output.content, /등록 여부는 조회하지 않았습니다/);
+  assert.ok(output.content.includes(`가상참고인 (${outside.orderId})`));
+  assert.ok(output.content.includes(`가상택배인 (\`${courierOnly.trackingNumber}\`), \`${unnamed.trackingNumber}\``));
+  assert.ok(s.toolRequests.every(request => !/가상참고인|가상택배인/.test(JSON.stringify(request.input))));
   assert.deepEqual(s.naverCalls.flat(), [naverOrder.productOrderId]);
 });
 
@@ -255,7 +262,7 @@ test('조회와 대화에서 확인한 송장 작업은 날짜 링크로 표시�
 });
 
 test('누락을 확인해 보류·제외 사유를 저장하고 남은 주문만 웹과 같은 업로드 엑셀에 담습니다', async t => {
-  const ready = order(1), hold = order(2), exclude = order(3);
+  const ready = order(1), hold = order(2, { recipient: '가상보류인' }), exclude = order(3, { recipient: '가상제외인' });
   const s = await boot(t, [ready]);
   const before = await s.start([ready, hold, exclude], [ready]), runId = before.run.id;
   const decisions = [
@@ -272,9 +279,11 @@ test('누락을 확인해 보류·제외 사유를 저장하고 남은 주문만
     },
     result => { assert.equal(result.ok, true); return tool('read_invoice', { runId }); },
     result => { assert.equal(item(result, hold).decision, 'hold'); return tool('get_invoice_file', { runId, mode: 'export' }); },
-    result => { assert.equal(result.ok, true); return '남은 주문의 업로드용 엑셀입니다.'; },
+    result => { assert.equal(result.ok, true); return `남은 주문의 업로드용 엑셀입니다. ${hold.productOrderId} 보류, ${exclude.productOrderId} 제외.`; },
   ]);
   assert.equal(output.files?.length, 1, output.content);
+  assert.ok(output.content.includes(`가상보류인 (${hold.productOrderId})`));
+  assert.ok(output.content.includes(`가상제외인 (${exclude.productOrderId})`));
   const view = await s.get(runId);
   for (const decision of decisions) {
     const saved = item(view, decision);
@@ -284,6 +293,34 @@ test('누락을 확인해 보류·제외 사유를 저장하고 남은 주문만
   assert.deepEqual(await s.file(view, 'saved'), output.files[0].attachment);
   assert.deepEqual(s.webCalls.filter(call => call.method === 'PATCH' && call.route === invoicePath(runId) + '/items')
     .map(call => call.body.validateOnly === true), [true, false]);
+});
+
+test('네이버 원본과 이름이 달라도 웹 표시 이름으로 보고하고 다음 모델 요청의 대화에는 덧붙인 이름을 넣지 않는다', async t => {
+  const saved = order(1, { recipient: '가상화면수취인' });
+  const naverOrder = { ...saved, recipient: '가상네이버수취인' };
+  const s = await boot(t, [saved], [naverOrder]);
+  const view = await s.start([naverOrder], [saved]), runId = view.run.id;
+  const row = view.currentOrders.find(order => order.itemIds.includes(item(view, saved).id));
+  assert.equal(row.recipient, saved.recipient);
+  assert.equal(item(view, saved).recipient, naverOrder.recipient);
+  const id = saved.productOrderId, botMessageId = '777777777777777111';
+  const first = await s.run(`송장 작업 #${runId} 확인이 필요한 상품을 알려줘`, [
+    tool('read_invoice', { runId }),
+    () => `확인 필요\n|상품주문번호|상태|\n|---|---|\n|\`${id}\`|확인 필요|\nhttps://example.test/orders/${id}`,
+  ], { botMessageId });
+  assert.ok(first.content.includes(`|${saved.recipient} (\`${id}\`)|확인 필요|`), first.content);
+  assert.ok(first.content.includes(`https://example.test/orders/${id}`));
+  assert.ok(!first.content.includes(naverOrder.recipient));
+  const next = await s.run('이전 확인 항목을 짧게 정리해줘', [
+    tool('read_invoice', { runId }),
+    () => `확인 필요 ${id}`,
+  ], { replyToId: botMessageId, botMessageId: '777777777777777112' });
+  assert.ok(next.content.includes(`${saved.recipient} (${id})`), next.content);
+  const modelInputs = JSON.stringify(s.toolRequests.map(request => request.input));
+  assert.ok(modelInputs.includes('conversation'), '후속 요청에서 보관 대화도 검증합니다.');
+  assert.ok(!modelInputs.includes(saved.recipient));
+  assert.ok(!modelInputs.includes(naverOrder.recipient));
+  assert.ok(!first.content.includes(saved.phone) && !first.content.includes(saved.address));
 });
 
 test('날짜에서 두 작업을 찾고 오전 보관본과 오후 최신 매칭 재생성 파일을 각각 반환합니다', async t => {
