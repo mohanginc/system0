@@ -232,10 +232,10 @@ test('봇 요청부터 실제 업무 HTTP API·엑셀 생성·저장본 재다�
   assert.equal(app.locals.db.prepare("SELECT count(*) AS n FROM discord_requests WHERE status = 'succeeded'").get().n, 2);
 });
 
-function assignmentServer() {
-  const calls = [], groups = [1, 2].map(id => ({ key: `product-${id}`, kind: 'assignment', assignEligible: true,
+function assignmentServer(count = 2) {
+  const calls = [], groups = Array.from({ length: count }, (_, index) => index + 1).map(id => ({ key: `product-${id}`, kind: 'assignment', assignEligible: true,
     itemIds: [id], productOrderIds: [`20261114000000000${id}`], orderId: '202611140000000099', recipient: '검증 수취인',
-    productName: '검증 쿠션', optionName: id === 1 ? '높이 13cm' : '높이 15cm', needsSelection: true, mode: null,
+    productName: '검증 쿠션', optionName: `높이 ${11 + id * 2}cm`, needsSelection: true, mode: null,
     candidates: [{ internalId: 'shipment-13cm', trackingNumber: '45500000001', valid: true },
       { internalId: 'shipment-15cm', trackingNumber: '45500000002', valid: true },
       { internalId: 'old-shipment', trackingNumber: '45500000000', valid: true, selectable: false }] }));
@@ -262,8 +262,9 @@ function assignmentServer() {
 }
 const discordComponents = output => (output.components || []).flatMap(row => row.components || []);
 
-test('분리 배송은 상품주문번호와 옵션을 구분해 각 송장을 독립 선택한다', async () => {
+test('같은 메시지의 두 분리 배송 메뉴를 임시 선택한 뒤 한 번에 적용한다', async () => {
   const mock = assignmentServer(), handle = createDiscordHandler({ config, fetcher: mock.fetcher });
+  const sourceMessageId = '900000000000000001';
   const first = await handle({ ...scope, id: '800000000000000001', action: 'show_status', date: event.date });
   const menus = discordComponents(first).filter(component => component.type === 3);
   assert.equal(menus.length, 2);
@@ -272,13 +273,24 @@ test('분리 배송은 상품주문번호와 옵션을 구분해 각 송장을 �
     assert.match(menu.placeholder, index === 0 ? /13cm/ : /15cm/);
     assert.deepEqual(menu.options.map(option => option.value), ['assign:45500000001', 'assign:45500000002']);
   }
-  await handle({ ...scope, id: '800000000000000002', buttonId: menus[0].custom_id, values: ['assign:45500000001'] });
-  const latest = await handle({ ...scope, id: '800000000000000003', action: 'show_status', date: event.date });
-  const second = discordComponents(latest).find(component => component.type === 3 && /15cm/.test(component.placeholder));
-  await handle({ ...scope, id: '800000000000000004', buttonId: second.custom_id, values: ['assign:45500000002'] });
+  const selected = await handle({ ...scope, id: '800000000000000002', sourceMessageId,
+    buttonId: menus[0].custom_id, values: ['assign:45500000001'] });
+  assert.equal(mock.calls.filter(call => call.route.endsWith('/tracking')).length, 0);
+  assert.equal(discordComponents(selected).find(component => component.label === '선택 적용')?.disabled, true);
+  assert.equal(discordComponents(selected).filter(component => component.type === 3).length, 2);
+  assert.equal(discordComponents(selected).find(component => component.type === 3).options.find(option => option.value === 'assign:45500000001').default, true);
+  const staged = await handle({ ...scope, id: '800000000000000003', sourceMessageId,
+    buttonId: menus[1].custom_id, values: ['assign:45500000002'] });
+  assert.doesNotMatch(staged.content, /작업 내용이 바뀌었습니다/);
+  assert.equal(mock.calls.filter(call => call.route.endsWith('/tracking')).length, 0);
+  assert.ok(mock.groups.every(group => group.needsSelection));
+  const apply = discordComponents(staged).find(component => component.label === '선택 적용');
+  assert.ok(apply, staged.content); assert.equal(Boolean(apply.disabled), false);
+  const applied = await handle({ ...scope, id: '800000000000000004', sourceMessageId, buttonId: apply.custom_id });
+  assert.equal(applied.files, undefined);
   assert.deepEqual(mock.calls.filter(call => call.route.endsWith('/tracking')).map(call => call.body.choices), [
-    [{ key: 'product-1', trackingNumber: '45500000001', mode: 'assign' }],
-    [{ key: 'product-2', trackingNumber: '45500000002', mode: 'assign' }],
+    [{ key: 'product-1', trackingNumber: '45500000001', mode: 'assign' },
+      { key: 'product-2', trackingNumber: '45500000002', mode: 'assign' }],
   ]);
   assert.equal(mock.groups[0].selectedTrackingNumber, '45500000001');
   assert.equal(mock.groups[1].selectedTrackingNumber, '45500000002');
@@ -286,30 +298,91 @@ test('분리 배송은 상품주문번호와 옵션을 구분해 각 송장을 �
   assert.ok(discordComponents(complete).some(component => component.label === '송장 선택 수정'));
 });
 
-test('분리 배송도 변경된 버전과 다른 직원의 선택 버튼을 거부하고 연결 불가 후보는 숨긴다', async () => {
+test('분리 배송은 후보가 바뀐 메뉴와 다른 직원의 선택을 거부하고 연결 불가 후보는 숨긴다', async () => {
   const mock = assignmentServer(); mock.groups[1].assignEligible = false;
   const otherUser = '777777777777777777';
   const handle = createDiscordHandler({ config: { ...config, userIds: [...config.userIds, otherUser] }, fetcher: mock.fetcher });
   const first = await handle({ ...scope, id: '800000000000000005', action: 'show_status', date: event.date });
   const menus = discordComponents(first).filter(component => component.type === 3);
   assert.equal(menus.length, 1);
-  const wrongUser = await handle({ ...scope, userId: otherUser, id: '800000000000000006', buttonId: menus[0].custom_id, values: ['assign:45500000001'] });
+  const sourceMessageId = '900000000000000005';
+  const wrongUser = await handle({ ...scope, userId: otherUser, id: '800000000000000006', sourceMessageId,
+    buttonId: menus[0].custom_id, values: ['assign:45500000001'] });
   assert.match(wrongUser.content, /계정.*채널/);
+  mock.groups[0].candidates[0].trackingNumber = '45500000009';
   mock.advance();
-  const stale = await handle({ ...scope, id: '800000000000000007', buttonId: menus[0].custom_id, values: ['assign:45500000001'] });
+  const stale = await handle({ ...scope, id: '800000000000000007', sourceMessageId,
+    buttonId: menus[0].custom_id, values: ['assign:45500000001'] });
   assert.match(stale.content, /바뀌|최신/);
   assert.equal(mock.calls.filter(call => call.route.endsWith('/tracking')).length, 0);
 });
 
-test('분리 배송 선택이 여러 건이면 저장한 항목보다 남은 상품주문을 먼저 보여준다', async () => {
-  const mock = assignmentServer();
-  mock.groups.push({ ...mock.groups[1], key: 'product-3', productOrderIds: ['202611140000000003'], itemIds: [3], optionName: '높이 17cm' });
-  const handle = createDiscordHandler({ config, fetcher: mock.fetcher });
+test('후보가 같은 상태의 전체 버전 변경은 임시 선택을 유지하고 최신 버전으로 적용한다', async () => {
+  const mock = assignmentServer(), handle = createDiscordHandler({ config, fetcher: mock.fetcher });
+  const sourceMessageId = '900000000000000009';
   const first = await handle({ ...scope, id: '800000000000000009', action: 'show_status', date: event.date });
-  const menu = discordComponents(first).find(component => component.type === 3);
-  const next = await handle({ ...scope, id: '800000000000000010', buttonId: menu.custom_id, values: ['assign:45500000001'] });
-  const menus = discordComponents(next).filter(component => component.type === 3);
-  assert.equal(menus.length, 2);
-  assert.ok(menus.some(component => /17cm/.test(component.placeholder)), '미선택 상품주문을 숨기지 않습니다.');
-  assert.ok(menus.every(component => !/202611140000000001/.test(component.placeholder)));
+  const menus = discordComponents(first).filter(component => component.type === 3);
+  await handle({ ...scope, id: '800000000000000010', sourceMessageId,
+    buttonId: menus[0].custom_id, values: ['assign:45500000001'] });
+  mock.advance();
+  const staged = await handle({ ...scope, id: '800000000000000011', sourceMessageId,
+    buttonId: menus[1].custom_id, values: ['assign:45500000002'] });
+  assert.doesNotMatch(staged.content, /작업 내용이 바뀌었습니다/);
+  const apply = discordComponents(staged).find(component => component.label === '선택 적용');
+  assert.ok(apply, staged.content); assert.equal(Boolean(apply.disabled), false);
+  await handle({ ...scope, id: '800000000000000012', sourceMessageId, buttonId: apply.custom_id });
+  const writes = mock.calls.filter(call => call.route.endsWith('/tracking'));
+  assert.equal(writes.length, 1); assert.equal(writes[0].body.expectedVersion, '2'.repeat(64));
+  assert.equal(writes[0].body.choices.length, 2);
+});
+
+test('임시 선택을 마친 뒤 후보가 바뀌면 이전 적용 버튼으로 아무것도 저장하지 않는다', async () => {
+  const mock = assignmentServer(), handle = createDiscordHandler({ config, fetcher: mock.fetcher });
+  const sourceMessageId = '900000000000000015';
+  const first = await handle({ ...scope, id: '800000000000000015', action: 'show_status', date: event.date });
+  const menus = discordComponents(first).filter(component => component.type === 3);
+  let output;
+  for (const [index, menu] of menus.entries()) output = await handle({ ...scope, id: String(800000000000000016n + BigInt(index)),
+    sourceMessageId, buttonId: menu.custom_id, values: [`assign:4550000000${index + 1}`] });
+  const apply = discordComponents(output).find(component => component.label === '선택 적용');
+  assert.ok(apply, output.content); assert.equal(Boolean(apply.disabled), false);
+  mock.groups[1].candidates[1].selectable = false; mock.advance();
+  const stale = await handle({ ...scope, id: '800000000000000018', sourceMessageId, buttonId: apply.custom_id });
+  assert.match(stale.content, /바뀌|최신|현재 목록/);
+  assert.equal(mock.calls.filter(call => call.route.endsWith('/tracking')).length, 0);
+  assert.ok(mock.groups.every(group => group.needsSelection));
+  assert.equal(stale.files, undefined);
+  assert.equal(discordComponents(stale).find(component => component.label === '선택 적용')?.disabled, true);
+});
+
+test('네 개를 넘는 선택은 페이지를 이동해도 유지하며 전체 선택 뒤 한 번에 적용한다', async () => {
+  const mock = assignmentServer(6);
+  const handle = createDiscordHandler({ config, fetcher: mock.fetcher });
+  const sourceMessageId = '900000000000000020';
+  let sequence = 800000000000000020n;
+  const interact = (buttonId, values) => handle({ ...scope, id: String(sequence++), sourceMessageId, buttonId,
+    ...(values ? { values } : {}) });
+  let output = await handle({ ...scope, id: String(sequence++), action: 'show_status', date: event.date });
+  const firstMenus = discordComponents(output).filter(component => component.type === 3);
+  assert.equal(firstMenus.length, 4); assert.ok(output.components.length <= 5);
+  for (const menu of firstMenus) output = await interact(menu.custom_id, ['assign:45500000001']);
+  assert.equal(discordComponents(output).find(component => component.label === '선택 적용')?.disabled, true);
+  const next = discordComponents(output).find(component => component.label === '다음');
+  assert.ok(next, output.content); output = await interact(next.custom_id);
+  const lastMenus = discordComponents(output).filter(component => component.type === 3);
+  assert.equal(lastMenus.length, 2);
+  for (const menu of lastMenus) output = await interact(menu.custom_id, ['assign:45500000002']);
+  const previous = discordComponents(output).find(component => component.label === '이전');
+  assert.ok(previous, output.content); output = await interact(previous.custom_id);
+  const restored = discordComponents(output).filter(component => component.type === 3);
+  assert.equal(restored.length, 4);
+  assert.ok(restored.every(menu => menu.options.find(option => option.value === 'assign:45500000001').default));
+  assert.equal(mock.calls.filter(call => call.route.endsWith('/tracking')).length, 0);
+  const apply = discordComponents(output).find(component => component.label === '선택 적용');
+  assert.ok(apply, output.content); assert.equal(Boolean(apply.disabled), false);
+  await interact(apply.custom_id);
+  const writes = mock.calls.filter(call => call.route.endsWith('/tracking'));
+  assert.equal(writes.length, 1); assert.equal(writes[0].body.choices.length, 6);
+  assert.deepEqual(writes[0].body.choices.map(choice => [choice.key, choice.trackingNumber]), mock.groups.map((group, index) =>
+    [group.key, index < 4 ? '45500000001' : '45500000002']));
 });

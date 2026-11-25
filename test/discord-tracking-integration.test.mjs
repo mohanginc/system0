@@ -5,6 +5,7 @@ import os from 'node:os';
 import { randomUUID } from 'node:crypto';
 import * as XLSX from 'xlsx';
 import { createDiscordHandler } from '../lib/discord-bot.mjs';
+import { sourceFile, naverFile, courierFile } from './fixtures/weekend-invoices.mjs';
 
 process.env.SYSTEM0_ENV_FILE = path.join(os.tmpdir(), `absent-${randomUUID()}.env`);
 process.env.DISCORD_ENV_FILE = path.join(os.tmpdir(), `absent-${randomUUID()}.env`);
@@ -52,10 +53,16 @@ test('채팅 첨부→직원 분할선택→실제 엑셀→정정파일 일괄�
   const menu = components(initial).find(c => c.type === 3); assert.ok(menu, initial.content);
   assert.ok(!components(initial).some(c => /엑셀/.test(c.label || '')));
   assert.equal(app.locals.db.prepare('SELECT count(*) n FROM invoice_runs WHERE generated_at IS NOT NULL').get().n, 0);
-  const selected = await handle(event({ buttonId: menu.custom_id, values: [`split:${second}`] }));
+  const sourceMessageId = '900000000000000001';
+  const selected = await handle(event({ sourceMessageId, buttonId: menu.custom_id, values: [`split:${second}`] }));
   assert.equal(selected.files, undefined);
-  const build = components(selected).find(c => c.label === '선택 완료 · 엑셀 만들기'); assert.ok(build, selected.content);
-  const generated = await handle(event({ buttonId: build.custom_id })); assert.ok(generated.files, generated.content);
+  const stagedView = await (await fetch(baseUrl + '/api/invoices/1')).json();
+  assert.equal(stagedView.trackingReview.pendingCount, 1);
+  const apply = components(selected).find(c => c.label === '선택 적용'); assert.ok(apply, selected.content);
+  const applied = await handle(event({ sourceMessageId, buttonId: apply.custom_id }));
+  assert.equal(applied.files, undefined);
+  const build = components(applied).find(c => c.label === '선택 완료 · 엑셀 만들기'); assert.ok(build, applied.content);
+  const generated = await handle(event({ sourceMessageId, buttonId: build.custom_id })); assert.ok(generated.files, generated.content);
   const originalBytes = generated.files[0].attachment;
   assert.deepEqual(rows(originalBytes).slice(1).map(row => [row[0], row[3]]), productIds.map(id => [id, second]));
   const before = await (await fetch(baseUrl + '/api/invoices/1')).json();
@@ -66,7 +73,7 @@ test('채팅 첨부→직원 분할선택→실제 엑셀→정정파일 일괄�
   const correction = await handle(event({ action: 'replace_invoice', date, attachments }));
   assert.equal(correction.files, undefined);
   const confirm = components(correction).find(c => c.label === '이번 파일의 송장으로 교체'); assert.ok(confirm, correction.content);
-  const corrected = await handle(event({ buttonId: confirm.custom_id })); assert.ok(corrected.files, corrected.content);
+  const corrected = await handle(event({ sourceMessageId: '900000000000000002', buttonId: confirm.custom_id })); assert.ok(corrected.files, corrected.content);
   assert.deepEqual(rows(corrected.files[0].attachment).slice(1).map(row => row[3]), [second, second]);
   const after = await (await fetch(baseUrl + '/api/invoices/2')).json();
   assert.equal(after.trackingReview.pendingCount, 0);
@@ -78,4 +85,69 @@ test('채팅 첨부→직원 분할선택→실제 엑셀→정정파일 일괄�
     body: JSON.stringify({ expectedVersion: before.viewVersion, choices: [{ key: after.trackingReview.groups[0].key, mode: 'replace', trackingNumber: second }] }) });
   assert.equal(stale.status, 409);
   assert.equal(outsideCalls, 0);
+});
+
+test('11월 23일 재출력 네 건의 원송장·새 송장을 같은 메시지에서 고른 뒤 일괄 적용해 엑셀로 받는다', async t => {
+  const reviewDate = '2026-11-23';
+  const orders = Array.from({ length: 4 }, (_, index) => ({
+    productOrderId: `2026112300000000${index + 1}`, orderId: `2026112300990000${index + 1}`, internalId: `test-shipment-${index}`,
+    trackingNumber: `4568000011${index}`, originalTrackingNumber: `4568000001${index}`, issueCount: 2, round: 1, printedAt: '16:28:17',
+    recipient: `테스트 수취인 ${index}`, phone: `010-0000-000${index}`, address: `테스트시 가상로 ${index + 1} 101호`,
+    productName: '테스트 쿠션', quantity: 1,
+  }));
+  let outsideCalls = 0;
+  const app = createApp({ databasePath: ':memory:', apiKey: '', client: null, discordConfig: config,
+    naver: { queryProductOrders: async () => { outsideCalls++; throw Error('No live Naver'); } } });
+  const server = await new Promise(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
+  t.after(async () => { await new Promise(resolve => { server.close(resolve); server.closeAllConnections(); }); app.locals.db.close(); });
+  const baseUrl = `http://127.0.0.1:${server.address().port}`;
+  const source = sourceFile(orders), naver = naverFile(orders), courier = courierFile(orders);
+  const sourceForm = new FormData(); sourceForm.append('files', new Blob([source.buffer]), source.name);
+  assert.equal((await fetch(baseUrl + '/api/import', { method: 'POST', body: sourceForm })).status, 201);
+  const writes = [];
+  const handle = createDiscordHandler({ config: { ...config, baseUrl }, fetcher: (url, options) => {
+    if (!String(url).startsWith(baseUrl)) return Promise.resolve(new Response(String(url).includes('naver') ? naver.buffer : courier.buffer));
+    if (String(url).endsWith('/tracking')) writes.push(JSON.parse(options.body));
+    return fetch(url, options);
+  } });
+  let sequence = 700000000000000001n;
+  const sourceMessageId = '900000000000000028';
+  const event = extra => ({ ...scope, id: String(sequence++), ...extra });
+  const interact = (buttonId, values) => handle(event({ sourceMessageId, buttonId, ...(values ? { values } : {}) }));
+  const attachments = [
+    { name: 'naver.xlsx', url: 'https://cdn.discordapp.com/attachments/1/2/naver.xlsx', size: naver.buffer.length },
+    { name: 'courier.xlsx', url: 'https://cdn.discordapp.com/attachments/1/2/courier.xlsx', size: courier.buffer.length },
+  ];
+  let output = await handle(event({ action: 'create_invoice', date: reviewDate, attachments }));
+  assert.equal(output.files, undefined, output.content);
+  const menus = components(output).filter(component => component.type === 3);
+  assert.equal(menus.length, 4); assert.ok(output.components.length <= 5);
+  assert.equal(components(output).find(component => component.label === '선택 적용')?.disabled, true);
+  const getView = () => fetch(baseUrl + '/api/invoices/1').then(response => response.json());
+  const before = await getView(); assert.equal(before.trackingReview.pendingCount, 4);
+  const numbers = orders.map((order, index) => index % 2 ? order.trackingNumber : order.originalTrackingNumber);
+  for (const [index, menu] of menus.entries()) {
+    assert.deepEqual(menu.options.map(option => option.value), [`original:${orders[index].originalTrackingNumber}`, `replace:${orders[index].trackingNumber}`]);
+    output = await interact(menu.custom_id, [`${index % 2 ? 'replace' : 'original'}:${numbers[index]}`]);
+    assert.equal(output.files, undefined); assert.doesNotMatch(output.content, /작업 내용이 바뀌었습니다/);
+    assert.equal(writes.length, 0); assert.equal((await getView()).viewVersion, before.viewVersion);
+    assert.equal(components(output).filter(component => component.type === 3 && component.options.some(option => option.default)).length, index + 1);
+    const apply = components(output).find(component => component.label === '선택 적용');
+    assert.ok(apply, output.content); assert.equal(Boolean(apply.disabled), index < 3);
+  }
+  output = await interact(components(output).find(component => component.label === '선택 적용').custom_id);
+  assert.equal(output.files, undefined); assert.equal(writes.length, 1);
+  assert.equal(writes[0].choices.length, 4);
+  assert.deepEqual(writes[0].choices.map(choice => [choice.trackingNumber, choice.mode, choice.acknowledgeOriginal || false]),
+    numbers.map((number, index) => [number, 'replace', index % 2 === 0]));
+  const applied = await getView();
+  assert.equal(applied.trackingReview.pendingCount, 0); assert.equal(applied.run.generatedAt, null);
+  assert.deepEqual(applied.items.map(item => item.trackingNumber), numbers);
+  assert.ok(applied.items.every(item => item.decision === 'include'));
+  const build = components(output).find(component => component.label === '선택 완료 · 엑셀 만들기');
+  assert.ok(build, output.content); output = await interact(build.custom_id);
+  assert.ok(output.files, output.content);
+  assert.deepEqual(rows(output.files[0].attachment).slice(1).map(row => [row[0], row[3]]),
+    orders.map((order, index) => [order.productOrderId, numbers[index]]));
+  assert.equal(writes.length, 1); assert.equal(outsideCalls, 0);
 });

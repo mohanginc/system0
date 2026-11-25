@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { createDiscordHandler } from '../lib/discord-bot.mjs';
+import { createDiscordHandler, updatesDiscordTrackingForm } from '../lib/discord-bot.mjs';
 
 const scope = { guildId: '111111111111111111', channelId: '222222222222222222', userId: '333333333333333333' };
 const config = { secret: 'isolated-tracking-review-secret-32chars', guildId: scope.guildId,
@@ -61,6 +61,8 @@ function fixture({ laterOnly = false, reference = false } = {}) {
   return { calls, group, view, fetcher, progress, advance: () => { revision++; } };
 }
 const components = output => (output.components || []).flatMap(row => row.components || []);
+const sourceMessageId = '555555555555555501';
+const apply = output => components(output).find(component => component.label === '선택 적용');
 
 test('복수 번호는 자동 파일 요청 없이 해당 출고의 교체·분할 선택을 받고 진행 전에 알린다', async () => {
   const f = fixture(), handle = createDiscordHandler({ config, fetcher: f.fetcher });
@@ -91,10 +93,23 @@ test('개별 출고 선택은 선택한 번호와 분할 여부를 저장하고 
   const f = fixture(), handle = createDiscordHandler({ config, fetcher: f.fetcher });
   const first = await handle(event), menu = components(first).find(component => component.type === 3);
   assert.ok(menu, first.content);
-  const wrongUser = await handle({ ...scope, userId: config.userIds[1], id: '555555555555555557', buttonId: menu.custom_id, values: ['split:45500000002'] });
+  const wrongScope = { ...scope, userId: config.userIds[1] };
+  assert.equal(updatesDiscordTrackingForm(config, scope, menu.custom_id), true);
+  assert.equal(updatesDiscordTrackingForm(config, wrongScope, menu.custom_id), false);
+  const wrongUser = await handle({ ...wrongScope, sourceMessageId, id: '555555555555555557', buttonId: menu.custom_id, values: ['split:45500000002'] });
   assert.equal(f.calls.some(c => c.route.endsWith('/tracking')), false); assert.match(wrongUser.content, /버튼|선택|계정|사용/);
-  const selected = await handle({ ...scope, id: '555555555555555558', buttonId: menu.custom_id, values: ['split:45500000002'] });
+  const staged = await handle({ ...scope, sourceMessageId, id: '555555555555555558', buttonId: menu.custom_id, values: ['split:45500000002'] });
+  assert.equal(f.group.mode, null); assert.equal(staged.files, undefined);
+  assert.equal(apply(staged).disabled, false);
+  const otherMessage = await handle({ ...scope, sourceMessageId: '555555555555555502', id: '555555555555555561', buttonId: apply(staged).custom_id });
+  assert.match(otherMessage.content, /임시 선택/);
+  assert.equal(f.calls.some(c => c.route.endsWith('/tracking')), false);
+  const selected = await handle({ ...scope, sourceMessageId, id: '555555555555555562', buttonId: apply(staged).custom_id },
+    { onProgress: content => f.progress.push({ content, saved: f.calls.some(c => c.route.endsWith('/tracking')) }) });
   assert.equal(f.group.mode, 'split'); assert.equal(selected.files, undefined);
+  assert.match(f.progress[0].content, /적용하겠습니다.*\n.*45500000002/);
+  assert.equal(f.progress[0].saved, false);
+  assert.match(selected.content, /1건을 적용했습니다/);
   const build = components(selected).find(component => component.label === '선택 완료 · 엑셀 만들기');
   assert.ok(build, selected.content);
   f.advance();
@@ -117,7 +132,9 @@ test('원송장 참조만 있어도 디스코드에서 두 번호 중 실제 라
   const menu = components(output).find(component => component.type === 3);
   assert.deepEqual(menu.options.map(option => option.value), ['original:45500000001', 'replace:45500000002']);
   assert.match(menu.options[0].label, /라벨을 확인한 원송장/);
-  const selected = await handle({ ...scope, id: '555555555555555564', buttonId: menu.custom_id, values: ['original:45500000001'] });
+  const staged = await handle({ ...scope, sourceMessageId, id: '555555555555555564', buttonId: menu.custom_id, values: ['original:45500000001'] });
+  assert.equal(f.group.selectedTrackingNumber, '');
+  const selected = await handle({ ...scope, sourceMessageId, id: '555555555555555566', buttonId: apply(staged).custom_id });
   assert.equal(f.group.selectedTrackingNumber, '45500000001');
   const build = components(selected).find(component => component.label === '선택 완료 · 엑셀 만들기');
   const result = await handle({ ...scope, id: '555555555555555565', buttonId: build.custom_id });

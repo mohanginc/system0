@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { Client, Events, GatewayIntentBits, MessageFlags, MessageType, SlashCommandBuilder } from 'discord.js';
 import { readDiscordConfig, discordScopeAllowed, discordMessageAddressed, discordEnvPath } from '../lib/discord-config.mjs';
-import { createDiscordHandler, discordAttachment } from '../lib/discord-bot.mjs';
+import { createDiscordHandler, discordAttachment, updatesDiscordTrackingForm } from '../lib/discord-bot.mjs';
 import { createDiscordTrace, discordTraceDirectory } from '../lib/discord-trace.mjs';
 
 const root = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
@@ -24,6 +24,7 @@ const intents = [GatewayIntentBits.Guilds, GatewayIntentBits.GuildMessages];
 if (config.plainMessageChannelIds.length) intents.push(GatewayIntentBits.MessageContent);
 const client = new Client({ intents });
 const handle = createDiscordHandler({ config, trace });
+const trackingUpdates = new Map();
 const allowedMentions = { parse: [], repliedUser: false };
 const commands = [
   new SlashCommandBuilder().setName('송장').setDescription('네이버·로젠 파일을 매칭해 네이버 업로드용 엑셀을 만듭니다.')
@@ -142,6 +143,7 @@ client.on(Events.InteractionCreate, async interaction => {
   if (component && !/^(s0:|s0r:)/.test(interaction.customId)) return;
   const actor = scope(interaction), kind = component ? 'component' : 'command';
   const record = requestTrace(interaction.id, actor, kind);
+  let updateForm = false;
   try {
     if (!discordScopeAllowed(config, actor)) {
       if (configuredChannel(actor)) trace({ stage: 'gateway.skipped', requestId: interaction.id, guildId: actor.guildId,
@@ -150,18 +152,37 @@ client.on(Events.InteractionCreate, async interaction => {
     }
     const action = Object.hasOwn(actions, interaction.commandName) ? actions[interaction.commandName] : undefined;
     record('gateway.received', component ? { componentKind: selectMenu ? 'select_menu' : 'button' } : { action });
-    await deliver(record, 'discord.ack', () => interaction.deferReply({ ...(component ? { flags: MessageFlags.Ephemeral } : {}) }));
-    const output = await handle({ id: interaction.id, ...actor, kind,
-      ...(component ? { buttonId: interaction.customId, values: selectMenu ? interaction.values : undefined } : { action,
-        date: interaction.options.getString('처리일') || undefined,
-        attachments: ['파일1', '파일2'].map(name => interaction.options.getAttachment(name)).filter(Boolean).map(discordAttachment) }) },
-    { onProgress: content => deliver(record, 'discord.progress', () => interaction.editReply({ content, allowedMentions })) });
-    await deliver(record, 'discord.delivery', () => interaction.editReply({ ...(output || { content: '이미 처리 중인 요청입니다.' }), allowedMentions }),
+    updateForm = component && updatesDiscordTrackingForm(config, actor, interaction.customId);
+    await deliver(record, 'discord.ack', () => updateForm ? interaction.deferUpdate()
+      : interaction.deferReply({ ...(component ? { flags: MessageFlags.Ephemeral } : {}) }));
+    const respond = async () => {
+      const output = await handle({ id: interaction.id, ...actor, kind,
+        ...(component ? { buttonId: interaction.customId, sourceMessageId: interaction.message.id,
+          values: selectMenu ? interaction.values : undefined } : { action,
+          date: interaction.options.getString('처리일') || undefined,
+          attachments: ['파일1', '파일2'].map(name => interaction.options.getAttachment(name)).filter(Boolean).map(discordAttachment) }) },
+      { onProgress: content => deliver(record, 'discord.progress', () => interaction.editReply({ content, allowedMentions })) });
+      const payload = { ...(output || { content: '이미 처리 중인 요청입니다.' }), allowedMentions };
+      await deliver(record, 'discord.delivery', () => updateForm && !output?.components?.length
+        ? interaction.followUp({ ...payload, flags: MessageFlags.Ephemeral }) : interaction.editReply(payload),
       { fileCount: output?.files?.length || 0, componentRowCount: output?.components?.length || 0 });
+    };
+    if (!updateForm) await respond();
+    else {
+      const messageId = interaction.message.id;
+      const current = (trackingUpdates.get(messageId) || Promise.resolve()).catch(() => {}).then(respond);
+      trackingUpdates.set(messageId, current);
+      try { await current; }
+      finally { if (trackingUpdates.get(messageId) === current) trackingUpdates.delete(messageId); }
+    }
   } catch (error) {
     if (!discordScopeAllowed(config, actor)) return;
     record('gateway.failed', errorDetails(error));
-    if (interaction.deferred) await deliver(record, 'discord.fallback', () => interaction.editReply({ content: '요청을 처리하지 못했습니다. system0에서 작업 상태를 확인해 주세요.', allowedMentions })).catch(() => {});
+    if (interaction.deferred) {
+      const payload = { content: '요청을 처리하지 못했습니다. system0에서 작업 상태를 확인해 주세요.', allowedMentions };
+      await deliver(record, 'discord.fallback', () => updateForm ? interaction.followUp({ ...payload, flags: MessageFlags.Ephemeral })
+        : interaction.editReply(payload)).catch(() => {});
+    }
   }
 });
 client.on(Events.Error, error => {
