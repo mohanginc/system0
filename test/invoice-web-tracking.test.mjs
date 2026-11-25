@@ -172,16 +172,18 @@ test('원송장 행 없이 번호만 있는 재출력도 두 후보를 표시하
   assert.deepEqual(h.calls[0].body.choices, [{ key: group.key, trackingNumber: '001234567001', mode: 'replace', acknowledgeOriginal: true }]);
 });
 
-test('보관 엑셀의 재출력 송장을 선택한 뒤에는 미등록 대상 엑셀과 보관본을 구분한다', () => {
+test('등록용 엑셀은 등록할 주문이 없으면 비활성화된다', () => {
   const group = reviewGroup({ kind: 'reprint_reference', mode: 'replace', needsSelection: false });
   const initial = detail({ run: { id: 8, generatedAt: '2026-11-23T00:53:00Z', savedFileAvailable: true },
     trackingReview: { groups: [group], pendingCount: 0 } });
   initial.items[0].registrationState = 'complete';
   const h = harness(initial);
-  assert.equal(h.run('primaryDownloadMode()'), 'export');
-  assert.equal(h.run('storedDownloadMode()'), 'saved');
-  h.run("current.items[1].registrationState = 'complete';");
-  assert.equal(h.run('primaryDownloadMode()'), 'saved');
+  h.run('refreshControls()');
+  assert.equal(h.nodes.get('export-button').disabled, false);
+  assert.match(h.nodes.get('export-note').textContent, /대상 1건/);
+  h.run("current.items[1].registrationState = 'complete'; refreshControls();");
+  assert.equal(h.nodes.get('export-button').disabled, true);
+  assert.match(h.nodes.get('export-note').textContent, /새로 등록할 주문이 없습니다/);
 });
 
 test('송장 선택이 남으면 새 파일 생성을 막고 정확한 남은 건수를 표시한다', () => {
@@ -239,10 +241,23 @@ test('과거 첨부의 송장으로 바꾸면 교체 모드를 그대로 적용�
   assert.equal(h.run("trackingChanges.get('shipment-1').mode"), '');
 });
 
-test('기존 파일이 있어도 새 송장 검토를 마쳤으면 현재 매칭 파일과 보관본을 구분한다', () => {
+test('기존 보관본과 추가·전체 파일을 같은 다시 받기 목록에 모은다', async () => {
   const h = harness(detail({ run: { id: 8, generatedAt: '2026-11-13T00:00:00Z', savedFileAvailable: true },
     trackingReview: { groups: [reviewGroup({ mode: 'replace', needsSelection: false, selectedTrackingNumber: '001234567002' })], pendingCount: 0 } }));
-  assert.equal(h.run('primaryDownloadMode()'), 'rebuild'); assert.equal(h.run('storedDownloadMode()'), 'saved');
+  h.context.mockApi = async () => ({ files: [
+    { id: 2, mode: 'all', productOrderIds: ['p1', 'p2'], filename: '전체.xlsx' },
+    { id: 1, mode: 'pending', productOrderIds: ['p2'], filename: '추가.xlsx' },
+  ] });
+  await h.run('loadArchivedFiles(current.run)');
+  const links = childrenWith(h.nodes.get('invoice-file-list'), 'a');
+  assert.deepEqual(links.map(link => link.href), ['/api/invoices/8/download', '/api/invoices/8/additional-files/2', '/api/invoices/8/additional-files/1']);
+  assert.match(links[0].textContent, /기존 보관본/);
+  assert.match(links[1].textContent, /전체 확인용.*2건/);
+  assert.match(links[2].textContent, /미등록 추가본.*1건/);
+  h.context.mockApi = async () => ({ files: [] });
+  await h.run('current.run.savedFileAvailable = false; loadArchivedFiles(current.run)');
+  assert.equal(h.nodes.get('invoice-file-history').hidden, true);
+  assert.equal(childrenWith(h.nodes.get('invoice-file-list'), 'a').length, 0);
 });
 
 test('송장 선택과 메모를 함께 저장할 때 선택 전의 보류 상태로 되돌리지 않는다', async () => {
@@ -255,15 +270,17 @@ test('송장 선택과 메모를 함께 저장할 때 선택 전의 보류 상�
     changes: [{ id: 1, decision: 'include', note: '가상 메모' }] });
 });
 
-test('웹 파일은 명시한 모드와 작업 버전을 공용 API에 전달한다', async () => {
-  const h = harness(), calls = [];
+test('네이버 등록용 버튼은 최신 매칭을 저장한 뒤에도 등록용 파일 모드만 요청한다', async () => {
+  const initial = detail({ run: { id: 8, generatedAt: '2026-11-13T00:00:00Z', savedFileAvailable: true },
+    trackingReview: { groups: [reviewGroup({ mode: 'replace', needsSelection: false })], pendingCount: 0 } });
+  const h = harness(initial), calls = [];
   h.context.fetch = async (url, options) => {
     calls.push({ url, method: options.method, body: JSON.parse(options.body) });
     return { ok: false, json: async () => ({ error: '최신 작업을 확인해 주세요.' }) };
   };
-  for (const mode of ['export', 'saved', 'rebuild']) await h.run(`downloadExcel('${mode}')`);
-  assert.deepEqual(calls, ['export', 'saved', 'rebuild'].map(mode => ({ url: '/api/invoices/8/file', method: 'POST',
-    body: { mode, expectedVersion: 'version-1' } })));
+  await h.nodes.get('export-button').listeners.get('click')();
+  assert.deepEqual(calls, [{ url: '/api/invoices/8/file', method: 'POST',
+    body: { mode: 'export', expectedVersion: 'version-1' } }]);
 });
 
 test('저장한 분할 대표 송장을 같은 화면에서 정정하고 무효 송장은 선택하지 못한다', async () => {

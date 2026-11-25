@@ -159,16 +159,17 @@ main.invoice-layout.history-collapsed { display: grid; grid-template-columns: 18
 .review-actions button { flex-shrink: 0; }
 .invoice-export, .check-registration { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 18px 20px; }
 .invoice-export { background: var(--navy); color: #fff; }
-.invoice-export strong, .check-registration strong { font-size: 13px; font-weight: 600; }
-.invoice-export p, .check-registration p { font-size: 11px; line-height: 1.7; margin: 6px 0 0; white-space: pre-line; }
+.check-registration strong { font-size: 13px; font-weight: 600; }
+.check-registration p { font-size: 11px; line-height: 1.7; margin: 6px 0 0; white-space: pre-line; }
+.invoice-export p { font-size: 12px; line-height: 1.7; margin: 0; }
 .invoice-export button.primary { background: #fff; color: var(--navy); border-color: #fff; }
 .export-actions { display: flex; flex-shrink: 0; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 .export-actions button:not(.primary) { background: transparent; border-color: #fff; color: #fff; }
 .invoice-export button.primary:hover:not(:disabled) { background: #faeaf0; }
 .invoice-export :focus-visible { outline-color: #fff; }
-.additional-export { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 20px; border-bottom: 1px solid #e5e5e2; }
-.additional-export summary { color: var(--navy); font-size: 12px; cursor: pointer; }
-.additional-export ul { margin: 8px 0; padding-inline-start: 18px; font-size: 12px; }
+.invoice-file-history { padding: 12px 20px; border-bottom: 1px solid #e5e5e2; }
+.invoice-file-history summary { color: var(--navy); font-size: 12px; cursor: pointer; }
+.invoice-file-history ul { margin: 8px 0 0; padding-inline-start: 18px; font-size: 12px; }
 .invoice-action-dialog { width: min(620px, calc(100% - 24px)); max-height: calc(100% - 24px); padding: 18px; color: var(--navy); border: 1px solid #dedfe4; border-radius: 12px; }
 .invoice-action-dialog::backdrop { background: rgba(12, 21, 52, .42); }
 .invoice-action-dialog h2 { margin: 0 0 12px; font-size: 18px; }

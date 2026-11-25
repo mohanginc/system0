@@ -28,32 +28,17 @@ function draftIssue(issue) { return { ...issue, ...issueChanges.get(issue.key) }
 function readOnlyOrder(order) { return Boolean(order.latestStatus?.readonly || ['canceled', 'returned'].includes(order.state)); }
 function scopeUnavailable() { return current && (current.scopeRequired || !Array.isArray(current.orders)); }
 function downloadItems() { return (current?.items || []).filter(item => item.decision === 'include' && item.registrationState !== 'complete' && !item.sourceRegistered); }
-function storedDownloadMode() { return current?.run.savedFileAvailable ? 'saved' : 'rebuild'; }
-function primaryDownloadMode() {
-  if (current?.run.savedFileAvailable && current.trackingReview?.groups.some(group => group.kind === 'reprint_reference' && group.mode)) {
-    return downloadItems().length ? 'export' : 'saved';
-  }
-  if (current?.run.generatedAt && (current.items.some(item => item.trackingSelection)
-    || current.trackingReview?.groups.some(group => group.mode))) return 'rebuild';
-  if (current?.run.generatedAt && current.currentOrders?.some(readOnlyOrder)) return storedDownloadMode();
-  return current?.run.generatedAt && !downloadItems().length ? storedDownloadMode() : 'export';
-}
 function blockingKeys(item) { return item.blockingIssueKeys || (item.issues || []).filter(key => current.issues.some(issue => issue.key === key && issue.blocking)); }
 function refreshControls() {
   const dirty = isDirty(), unresolved = (current?.issues || []).filter(issue => issue.reviewRequired !== false && !issue.resolved).length;
   const pendingTracking = current?.trackingReview?.pendingCount || 0;
   const exportable = downloadItems().length;
   const blocked = (current?.items || []).some(item => item.decision === 'include' && (item.registrationState === 'conflict' || blockingKeys(item).length));
-  const mode = primaryDownloadMode(), included = (current?.items || []).filter(item => item.decision === 'include').length;
   const needsReview = pendingTracking > 0 || unresolved > 0 || blocked || scopeUnavailable() || current?.rematchRequired;
   for (const control of document.querySelectorAll('button, input, select, textarea')) control.disabled = busy || control.dataset.locked === 'true';
   $('import-button').disabled = busy || !previewReady || !$('naver-files').files.length || !$('courier-files').files.length || !$('carrier').value;
   $('save-button').disabled = busy || !dirty || scopeUnavailable() || current?.rematchRequired;
-  $('export-button').disabled = busy || !current || dirty || (mode !== 'saved' && (needsReview || !(mode === 'rebuild' ? included : exportable)));
-  $('export-button').textContent = mode === 'saved' ? '생성한 엑셀 다시 받기' : mode === 'rebuild' ? '현재 매칭 엑셀 받기' : '네이버 업로드용 엑셀';
-  $('redownload-button').hidden = !current?.run.generatedAt || mode === 'saved' || (mode === 'rebuild' && !current.run.savedFileAvailable);
-  $('redownload-button').disabled = busy || dirty || (storedDownloadMode() !== 'saved' && (needsReview || !included));
-  $('redownload-button').textContent = storedDownloadMode() === 'saved' ? '생성한 엑셀 다시 받기' : '현재 매칭 엑셀 받기';
+  $('export-button').disabled = busy || !current || dirty || needsReview || !exportable;
   $('check-button').disabled = busy || !current || dirty || (!current.items.length && !current.outsideOrders?.length) || scopeUnavailable() || current.rematchRequired;
   $('check-button').textContent = checkingRegistration ? '조회 중…' : '등록 상태 확인';
   $('date-check-button').hidden = Boolean(current);
@@ -66,7 +51,7 @@ function refreshControls() {
   const replacements = replacementChoices();
   $('replace-tracking-button').hidden = !replacements.length;
   $('replace-tracking-button').disabled = busy || dirty || !replacements.length;
-  $('pending-export-button').hidden = $('additional-export').hidden = !current || scopeUnavailable() || current.rematchRequired || !current.items.length;
+  $('pending-export-button').hidden = $('full-export-button').hidden = !current || scopeUnavailable() || current.rematchRequired || !current.items.length;
   $('pending-export-button').disabled = $('full-export-button').disabled = busy || dirty;
   for (const button of document.querySelectorAll('.manual-tracking-button')) button.disabled = busy || dirty;
   $('dirty-note').textContent = dirty ? '검토 내용이 변경되었습니다. 저장해 주세요.' : '';
@@ -77,14 +62,11 @@ function refreshControls() {
   }
   $('save-button').textContent = busy && dirty ? '저장 중…' : '검토 내용 저장';
   if (current) $('export-note').textContent = dirty ? '변경한 검토 내용을 먼저 저장하세요.'
-    : mode === 'saved' ? '이미 생성한 파일을 그대로 다시 내려받습니다. 네이버 등록 상태는 아래에서 확인하세요.'
-    : current.rematchRequired ? '다른 날짜의 주문까지 확인하려면 같은 ①·③ 파일을 다시 선택해 매칭하세요.'
-    : pendingTracking ? `송장 선택 ${count(pendingTracking)}건이 남았습니다. 적용할 송장을 선택하고 저장하세요.`
-    : unresolved ? '주문 행의 경고를 확인한 뒤 검토 내용을 저장하세요. 메모는 선택 사항입니다.'
-    : blocked ? '연결 근거가 부족하거나 등록 송장이 다른 포함 항목을 보류·제외해 주세요.'
-    : mode === 'rebuild' ? `현재 매칭 ${count(included)}건으로 새 엑셀을 만듭니다. 등록 완료 건도 포함됩니다.`
-    : !exportable ? '새로 엑셀로 만들 상품주문이 없습니다. 등록 완료·보류·제외 상태를 확인하세요.'
-    : `네이버 상품주문 ${count(exportable)}건 · 보류·제외·등록 확인 완료 건은 포함하지 않습니다.\n다운로드만으로 등록 완료가 되지 않습니다.`;
+    : scopeUnavailable() || current.rematchRequired ? '등록용 엑셀을 만들려면 파일을 다시 매칭하세요.'
+    : pendingTracking ? `송장 선택 ${count(pendingTracking)}건이 남았습니다.`
+    : unresolved ? '경고를 확인하고 검토 내용을 저장하세요.'
+    : blocked ? '송장 충돌 항목을 확인하세요.'
+    : exportable ? `등록용 엑셀 대상 ${count(exportable)}건` : '새로 등록할 주문이 없습니다.';
 }
 function setBusy(value) { busy = value; $('run-section').setAttribute('aria-busy', String(value)); refreshControls(); }
 async function api(url, options = {}) {
@@ -670,7 +652,7 @@ function showRun(data) {
   $('last-check').textContent = checkedAt ? `마지막 등록 조회: ${formatTime(checkedAt)}` : '아직 네이버 등록 상태를 조회하지 않았습니다.';
   renderRegistrationResult();
   renderIssues(); if (unavailable) $('issues-section').hidden = true; renderItems(); renderHistory(); refreshControls();
-  if (!$('additional-export').hidden) loadAdditionalFiles(data.run.id);
+  loadArchivedFiles(data.run);
 }
 async function loadRun(id) {
   setBusy(true); message('송장 매칭 결과를 불러오고 있습니다.');
@@ -751,20 +733,20 @@ async function replaceCurrentTracking() {
   } catch (error) { message(error.message, true); }
   finally { setBusy(false); }
 }
-async function downloadExcel(mode = primaryDownloadMode()) {
+async function downloadRegistrationExcel() {
   if (busy || !current || isDirty()) return;
   let downloadStarted = false;
-  setBusy(true); message(mode === 'saved' ? '보관된 엑셀을 내려받고 있습니다.' : '네이버 업로드용 엑셀을 만들고 있습니다.');
+  setBusy(true); message('네이버 등록용 엑셀을 만들고 있습니다.');
   try {
     const response = await fetch(`/api/invoices/${current.run.id}/file`, { method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ mode, expectedVersion: current.viewVersion }), cache: 'no-store', signal: AbortSignal.timeout(60000) });
+      body: JSON.stringify({ mode: 'export', expectedVersion: current.viewVersion }), cache: 'no-store', signal: AbortSignal.timeout(60000) });
     if (!response.ok) { const data = await response.json(); throw new Error(data.error || '엑셀을 만들지 못했습니다.'); }
     const blob = await response.blob(), url = URL.createObjectURL(blob), link = element('a');
     const disposition = response.headers.get('content-disposition') || '', match = disposition.match(/filename\*=UTF-8''([^;]+)/i);
     link.href = url; link.download = match ? decodeURIComponent(match[1]) : `네이버_송장등록_${workDate(current.run.createdAt)}.xlsx`;
     document.body.append(link); link.click(); link.remove(); setTimeout(() => URL.revokeObjectURL(url), 60000);
     downloadStarted = true; showRun(await api(`/api/invoices/${current.run.id}`)); showRecentHistory = true; await loadHistory();
-    message(mode === 'saved' ? '보관된 엑셀의 다운로드를 요청했습니다.' : mode === 'rebuild' ? '등록 완료 건을 포함한 현재 매칭으로 엑셀을 다시 만들었습니다.' : '엑셀을 생성해 다운로드를 요청했습니다. 스마트스토어 업로드 후 ‘등록 상태 확인’을 눌러 주세요.');
+    message('네이버 등록용 엑셀을 만들었습니다.');
   } catch (error) { message(downloadStarted ? `엑셀 다운로드 요청은 완료했지만 생성 내역을 갱신하지 못했습니다. 왼쪽 새로고침으로 확인해 주세요.\n${error.message}` : error.message, true); }
   finally { setBusy(false); }
 }
@@ -876,19 +858,25 @@ function additionalFileLink(runId, file, text = file.filename) {
   link.href = `/api/invoices/${runId}/additional-files/${file.id}`; link.download = file.filename;
   return link;
 }
-let additionalFilesRequest = 0;
-async function loadAdditionalFiles(runId, open = false) {
-  const request = ++additionalFilesRequest, history = $('additional-file-history'), list = $('additional-file-list');
-  history.hidden = true; list.replaceChildren();
+let archivedFilesRequest = 0;
+async function loadArchivedFiles(run, open = false) {
+  const request = ++archivedFilesRequest, history = $('invoice-file-history'), list = $('invoice-file-list');
+  const runId = run.id;
+  list.replaceChildren(); history.hidden = !run.savedFileAvailable;
+  if (run.savedFileAvailable) {
+    const row = element('li'), link = element('a', `${formatTime(run.generatedAt)} · 기존 보관본`);
+    link.href = `/api/invoices/${runId}/download`;
+    row.append(link); list.append(row);
+  }
   try {
     const { files } = await api(`/api/invoices/${runId}/additional-files`);
-    if (request !== additionalFilesRequest || current?.run.id !== runId) return;
+    if (request !== archivedFilesRequest || current?.run.id !== runId) return;
     for (const file of files) {
       const row = element('li');
-      row.append(additionalFileLink(runId, file, `${formatTime(file.createdAt)} · ${file.mode === 'all' ? '전체 엑셀' : '미등록 추가 엑셀'} · ${count(file.productOrderIds.length)}건`));
+      row.append(additionalFileLink(runId, file, `${formatTime(file.createdAt)} · ${file.mode === 'all' ? '전체 확인용' : '미등록 추가본'} · ${count(file.productOrderIds.length)}건`));
       list.append(row);
     }
-    history.hidden = !files.length;
+    history.hidden = !run.savedFileAvailable && !files.length;
     current.run.fileCreatedAt = files.at(-1)?.createdAt || current.run.generatedAt;
     refreshControls();
     if (open) history.open = true;
@@ -899,7 +887,7 @@ function openAdditionalExport(mode) {
   const runId = current.run.id, completeFile = mode === 'all', fields = document.createDocumentFragment();
   const items = current.items.filter(item => !item.superseded), byId = new Map(items.map(item => [item.productOrderId, item]));
   const entries = [];
-  if (completeFile) fields.append(element('p', '등록 확인을 마친 주문도 포함합니다.'));
+  if (completeFile) fields.append(element('p', '등록 완료 건도 포함하는 확인용 파일입니다.'));
   else {
     const toolbar = element('div', undefined, 'invoice-export-search'), search = element('input');
     search.type = 'search'; search.placeholder = '수취인·상품주문번호 검색';
@@ -931,7 +919,7 @@ function openAdditionalExport(mode) {
     });
     filter(); updateCount();
   }
-  invoiceActionDialog({ title: completeFile ? '현재 매칭 전체 엑셀' : '선택 주문 미등록 엑셀', fields, path: 'additional-files',
+  invoiceActionDialog({ title: completeFile ? '전체 확인용 엑셀' : '선택 주문 미등록 엑셀', fields, path: 'additional-files',
     getBody() {
       const productOrderIds = completeFile ? null : entries.filter(entry => entry.checkbox.checked).map(entry => entry.productOrderId);
       if (!completeFile && !productOrderIds.length) throw new Error('엑셀에 넣을 상품주문을 하나 이상 선택해 주세요.');
@@ -947,7 +935,7 @@ function openAdditionalExport(mode) {
     }, applyLabel: '엑셀 생성 및 다운로드', applied(result) {
       const link = additionalFileLink(runId, result.file);
       document.body.append(link); link.click(); link.remove();
-      loadAdditionalFiles(runId, true);
+      loadArchivedFiles(current.run, true);
       loadHistory().catch(error => { $('history-message').textContent = error.message; });
       message(`${completeFile ? '전체' : '미등록 추가'} 엑셀 ${count(result.included.length)}건의 다운로드를 요청했습니다.${result.skipped.length ? ` 미포함 ${count(result.skipped.length)}건` : ''}`);
     },
@@ -1024,8 +1012,7 @@ $('replace-files').addEventListener('click', replaceFiles);
 $('history-toggle').addEventListener('click', toggleHistory);
 $('save-button').addEventListener('click', saveReview);
 $('replace-tracking-button').addEventListener('click', replaceCurrentTracking);
-$('export-button').addEventListener('click', () => downloadExcel());
-$('redownload-button').addEventListener('click', () => downloadExcel(storedDownloadMode()));
+$('export-button').addEventListener('click', downloadRegistrationExcel);
 $('pending-export-button').addEventListener('click', () => openAdditionalExport('pending'));
 $('full-export-button').addEventListener('click', () => openAdditionalExport('all'));
 $('invoice-action-close').addEventListener('click', () => $('invoice-action-dialog').close());
