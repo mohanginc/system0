@@ -92,20 +92,23 @@ function renderGroup(group, open, view = 'confirmed') {
   details.classList.toggle('is-attention', Boolean(group.needsAttention));
   const summary = element('summary'), name = element('div', undefined, 'shipment-name');
   name.append(element('h2', group.name || '상품명 미정리'));
-  const barcode = group.skuBarcode ? `바코드 ${group.skuBarcode}` : '바코드 없음';
-  name.append(element('small', barcode + (group.shipmentType === 'exchange' ? ' · 맞교환' : ''), 'sku-barcode'));
+  if (!registered || (group.components?.length ?? 1) === 1) {
+    const barcode = group.skuBarcode ? `바코드 ${group.skuBarcode}` : '바코드 없음';
+    name.append(element('small', barcode + (group.shipmentType === 'exchange' ? ' · 맞교환' : ''), 'sku-barcode'));
+  }
   const status = group.needsAttention ? (quantityView ? '상품명 확인이 필요합니다. 상세 목록의 사유를 확인하세요.' : '출고 정보 확인이 필요합니다.') : group.unprepared ? '상품명 정리가 필요합니다.'
     : complete ? '몰 송장 등록 확인 완료' : invoiceState(group.invoiceState) === 'pending' ? '송장 등록 확인 필요' : '';
   if (status) name.append(element('span', status, 'item-status'));
   const quantity = element('div', undefined, 'bundle-number');
-  quantity.append(element('strong', count(registered ? group.quantity : group.count)), element('span', quantityView ? '개' : '묶음'));
+  quantity.append(element('strong', count(registered ? group.boxCount : group.count)),
+    element('span', registered ? '상자' : quantityView ? '개' : '묶음'));
   const arrow = element('span', undefined, 'expand-arrow'); arrow.setAttribute('aria-hidden', 'true');
   summary.append(name, quantity, arrow); details.append(summary);
   const container = element('div', undefined, 'shipment-details'), table = element('table', undefined, 'shipment-table');
   table.setAttribute('aria-label', `${group.name || '미정리 항목'} 상세 출고 목록`);
   const header = table.createTHead().insertRow();
-  const headings = registered ? ['상자', '수취인'] : ['수취인', '전화번호', '동네'];
-  if (quantityView) headings.push('수량');
+  const headings = registered ? ['상자', '수취인', '상품 수량'] : ['수취인', '전화번호', '동네'];
+  if (view === 'new') headings.push('수량');
   for (const label of headings) {
     const th = element('th', label); th.scope = 'col'; header.append(th);
   }
@@ -116,7 +119,8 @@ function renderGroup(group, open, view = 'confirmed') {
       : [shipment.recipient || '미등록', shipment.phone || '미등록', shipment.neighborhood || '지역 정보 없음'];
     for (const value of data) row.insertCell().textContent = value;
     if (quantityView) {
-      row.insertCell().textContent = count(shipment.quantity);
+      const units = count(shipment.quantity);
+      row.insertCell().textContent = registered ? `${units}개` : units;
       if (shipment.note) row.cells[0].append(element('small', shipment.note, 'review-reason'));
     }
   }
