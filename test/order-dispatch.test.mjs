@@ -6,7 +6,7 @@ import { getOrderPacking, registerOrderDispatch, registeredOrderQuantities, revi
 import { shippingBoard, shippingDates } from '../lib/shipping.mjs';
 import { reportHandlers } from '../lib/discord-report-tools.mjs';
 
-const address = { name: '가상 수취인', baseAddress: '가상시 가상로 17', detailedAddress: '101호', zipCode: '01234' };
+const address = { name: '가상 수취인', tel2: '0500-0000-0001', baseAddress: '가상시 가상로 17', detailedAddress: '101호', zipCode: '01234' };
 const line = (id, productName, quantity, shippingAddress = address) => ({
   productOrderId: `20261127100000${id}`, orderId: `20261127200000${id}`, status: 'PAYED', placeOrderStatus: 'NOT_YET',
   productName, optionName: '', quantity, financial: { unitPrice: 1000, paymentAmount: 1000 * quantity },
@@ -24,6 +24,8 @@ test('출고 등록은 합포장과 미배정 잔여량을 별도 상자로 이�
   name.run('정상 쿠션', '8809538930146', first);
   name.run('별칭 쿠션', '8809538930146', alias);
   name.run('가상 커버', '8809538930375', cover);
+  db.prepare('UPDATE order_intake_items SET provider = ? WHERE id = ?').run('kakao', alias);
+  db.prepare('UPDATE order_intake_items SET provider = ? WHERE id = ?').run('새 판매채널', cover);
   const raw = db.prepare('SELECT id, quantity, order_json FROM order_intake_items ORDER BY id').all();
   const planned = reviseOrderPacking(db, { expectedVersion: getOrderPacking(db).version, removeBoxIds: [], boxes: [
     { items: [item(first), item(alias), item(cover)] }, { items: [item(first)] },
@@ -61,8 +63,19 @@ test('출고 등록은 합포장과 미배정 잔여량을 별도 상자로 이�
   assert.match(mixed.name, /정상 쿠션 ×2/);
   assert.equal(mixed.shipments[0].boxId, board.registered.boxes[0].id);
   assert.equal(mixed.shipments[0].quantity, 3);
-  assert.doesNotMatch(JSON.stringify(board.registered), /가상시|101호|01234/);
+  assert.deepEqual(mixed.shipments[0].channels, ['네이버', '카카오', '새 판매채널']);
+  assert.deepEqual([mixed.shipments[0].recipient, mixed.shipments[0].phone, mixed.shipments[0].neighborhood],
+    [address.name, address.tel2, '가상시']);
+  assert.doesNotMatch(JSON.stringify(board.registered), /가상로|101호|01234/);
+  assert.doesNotMatch(JSON.stringify(getOrderPacking(db)), /0500-0000-0001|가상로/);
   name.run('나중에 수정한 쿠션', null, first);
+  assert.deepEqual(shippingBoard(db, registered.date).registered, board.registered);
+  const registeredBox = board.registered.boxes[0];
+  const laterSource = JSON.stringify({ productOrder: { shippingAddress: { ...address, tel1: '0500-0000-0002', baseAddress: '다른시 다른로 1' } } });
+  db.prepare(`INSERT INTO order_intake_snapshots (item_id, recorded_at, source_method, source_json)
+    VALUES (?, ?, 'api', ?)`).run(first, new Date(Date.parse(registeredBox.registeredAt) + 1000).toISOString(), laterSource);
+  assert.deepEqual(shippingBoard(db, registered.date).registered, board.registered);
+  db.prepare('UPDATE order_dispatch_boxes SET contact_phone = NULL, contact_neighborhood = NULL WHERE id = ?').run(registeredBox.id);
   assert.deepEqual(shippingBoard(db, registered.date).registered, board.registered);
   assert.deepEqual(shippingDates(db, registered.date.slice(0, 7)).days, [
     { date: registered.date, batchCount: 0, registeredCount: 3, invoiceState: 'unavailable' },
@@ -98,6 +111,7 @@ test('쿠션 단품 8상자와 손수건 합포장 1상자를 표시하며 각 �
   const filtered = await reports.get_shipping_board({ date, batchId: null, search: '8809538930184' });
   assert.equal(filtered.registered.quantity, 9);
   assert.deepEqual(filtered.registered.groups.map(group => group.boxCount), [8, 1]);
+  assert.doesNotMatch(JSON.stringify(filtered), /0500-0000-0001|가상 수취인|가상시/);
 
   const additional = [line(30, embossed, 1), line(31, gauze, 1), line(32, cushion, 1)];
   await collect(db, [...orders, ...additional]);

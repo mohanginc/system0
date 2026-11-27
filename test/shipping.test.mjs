@@ -171,10 +171,12 @@ test('동네는 명시된 행정구역만 반환하고 도로명·건물·호수
   for (const [address, expected] of cases) assert.equal(neighborhood(address), expected);
   const db = openDatabase(':memory:');
   try {
-    batch(db, [rawRow('A')], ['단일 상품']);
+    batch(db, [[...rawRow('A'), '카카오톡스토어']], ['단일 상품'], stamp,
+      ['원상품명', '주문번호', '체결번호', '송화주', '전화번호', '주소', '수량', '판매채널']);
     const result = shippingBoard(db, date);
     const shipment = result.groups[0].shipments[0];
-    assert.deepEqual(Object.keys(shipment).sort(), ['id', 'recipient', 'phone', 'neighborhood'].sort());
+    assert.deepEqual(Object.keys(shipment).sort(), ['id', 'recipient', 'phone', 'neighborhood', 'channels'].sort());
+    assert.deepEqual(shipment.channels, ['카카오']);
     assert.equal(shipment.neighborhood, '서울 강남구 역삼동');
     const serialized = JSON.stringify(result);
     for (const forbidden of ['테헤란로', '123', '테스트빌딩', '101호', 'raw_json', 'address']) assert.ok(!serialized.includes(forbidden), '주소·원본 정보는 응답에 포함하지 않아야 합니다.');
@@ -195,7 +197,7 @@ test('실제 레거시 샘플은 합배송 명칭도 제품 개수 대신 출고
     assert.equal(result.summary.missingIdCount, 1);
     assert.equal(result.groups.find(group => group.name.includes('전용방수커버')).count, 1);
     assert.ok(Buffer.from(db.prepare('SELECT content FROM source_files').get().content).equals(source.buffer));
-    assert.ok(result.groups.flatMap(group => group.shipments).every(shipment => Object.keys(shipment).length === 4));
+    assert.ok(result.groups.flatMap(group => group.shipments).every(shipment => Object.keys(shipment).length === 5));
   } finally { db.close(); }
 });
 
