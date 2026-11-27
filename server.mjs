@@ -11,7 +11,8 @@ import { openDatabase, batchDetail, listBatches, deleteBatch, deleteRows } from 
 import { importFiles, exportDownload } from './lib/excel.mjs';
 import { normalizeBatch, reviseRows } from './lib/naming.mjs';
 import { listLlmPurposes, llmUsage } from './lib/llm.mjs';
-import { shippingBoard, shippingDates } from './lib/shipping.mjs';
+import { shippingBoard, shippingDates, shippingDayRange } from './lib/shipping.mjs';
+import { checkDispatchCancellations } from './lib/dispatch-cancellations.mjs';
 import { logenExport } from './lib/logen-export.mjs';
 import { createNaverClient } from './lib/naver.mjs';
 import { previewShippingBoard } from './lib/shipping-preview.mjs';
@@ -312,9 +313,25 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
     finally { invoiceChecking.delete(id); }
   });
   app.use('/api/shipping', (_request, response, next) => { response.set('Cache-Control', 'no-store'); next(); });
+  const cancellationChecks = new Set();
   app.get('/api/shipping/board', (request, response) => response.json(shippingBoard(db, request.query.date, request.query.batchId)));
   app.get('/api/shipping/dates', (request, response) => response.json(shippingDates(db, request.query.month)));
+  app.post('/api/shipping/cancellations/check', async (request, response) => {
+    const { date } = request.body || {};
+    const [from, to] = shippingDayRange(date);
+    if (cancellationChecks.has(date)) return response.status(409).json({ error: '이 날짜의 네이버 취소 상태를 이미 확인하고 있습니다.' });
+    cancellationChecks.add(date);
+    try {
+      const check = await checkDispatchCancellations(db, from, to, naver);
+      response.json({ check, board: shippingBoard(db, date) });
+    } finally {
+      cancellationChecks.delete(date);
+    }
+  });
   app.get('/api/shipping/logen-export', (request, response) => {
+    if (cancellationChecks.has(request.query.date)) {
+      return response.status(409).json({ error: '네이버 취소 상태를 확인 중입니다. 확인 결과가 나온 뒤 로젠 엑셀을 받아 주세요.' });
+    }
     try {
       const output = logenExport(db, request.query.date, request.query.format);
       if (request.query.format === 'summary') return response.json(output);

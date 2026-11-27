@@ -211,6 +211,56 @@ test('봇은 로젠 등록 파일의 요약만 읽고 로그인해서 받는 링
   assert.doesNotMatch(JSON.stringify(session.modelRequests), /가상 101호|01234/);
 });
 
+test('봇은 네이버 취소를 확인한 뒤 출고 가능 상자와 웹의 같은 결과를 안내합니다', async t => {
+  const ids = ['202611270500000001', '202611270500000002'];
+  const orders = ids.map(productOrderId => ({
+    productOrderId, orderId: productOrderId, originalName: original[1][0], productName: original[1][0],
+    optionName: original[1][1], quantity: 1, status: 'PAYED', placeOrderStatus: 'NOT_YET',
+    sourcePayload: { content: { productOrder: { shippingAddress: {
+      name: original[1][2], tel1: original[1][3], baseAddress: original[1][4], detailedAddress: '가상 101호', zipCode: '01234',
+    } } } },
+  }));
+  const lookups = [];
+  const session = await boot(t, { naver: {
+    async listNewOrders() { return { from: '2026-11-20T00:00:00Z', to: '2026-11-27T00:00:00Z', orders }; },
+    async queryProductOrders(productOrderIds, options) {
+      lookups.push({ ids: [...productOrderIds].sort(), options });
+      return orders.map(({ productOrderId, orderId }, index) => ({ productOrderId, orderId,
+        status: index ? 'CANCELED' : 'PAYED', remainQuantity: index ? 0 : 1, claimStatus: index ? 'CANCEL_DONE' : '' }));
+    },
+  } });
+  await session.web('/api/order-intake/collect', json('POST', {}));
+  const packing = await (await session.web('/api/order-intake/packing')).json();
+  const { date } = await (await session.web('/api/order-intake/dispatch', json('POST', {
+    expectedVersion: packing.version, boxIds: [], orderItemIds: packing.orders.map(order => order.id),
+  }))).json();
+  const boardRoute = '/api/shipping/board?date=' + date;
+  const result = await session.run(`${date} 발송 전에 네이버에서 취소된 게 있는지 보고, 당장 준비할 새싹 수유쿠션 수량도 알려줘.`, [
+    tool('check_shipping_cancellations', { date }),
+    value => {
+      assert.equal(value.ok, true);
+      assert.deepEqual(value.webTarget, { page: 'shipping', date });
+      assert.ok(value.summary.lastCheckedAt);
+      const { lastCheckedAt, ...counts } = value.summary;
+      assert.deepEqual(counts, { naverBoxCount: 2, matchedCount: 2, queriedCount: 2, readyCount: 1, holdCount: 0, canceledCount: 1, unverifiedCount: 0 });
+      return tool('get_shipping_board', { date, batchId: null, search: '새싹 수유쿠션' });
+    },
+    async value => {
+      const { registered } = await (await session.web(boardRoute)).json();
+      assert.equal(value.registered.boxCount, registered.boxCount);
+      assert.equal(value.registered.canceledBoxCount, registered.canceledBoxCount);
+      assert.equal(value.registered.quantity, 1);
+      assert.equal(value.registered.groups[0].quantity, 1);
+      return '취소 1상자를 제외하고 새싹 수유쿠션 1개를 준비하면 됩니다.';
+    },
+  ]);
+  assert.deepEqual(lookups, [{ ids, options: { includeIntake: true, allowMissing: true } }]);
+  assert.ok(session.calls.some(call => call.route === '/api/shipping/cancellations/check' && call.method === 'POST' && call.status === 200));
+  assert.match(result.content, /네이버 취소 확인.+출고 가능 1상자.+취소 1상자/);
+  assert.ok(result.content.includes(`[웹에서 작업 열기](https://system0.example/shipping-board.html?date=${date})`));
+  assert.doesNotMatch(JSON.stringify(session.modelRequests), new RegExp(ids.join('|')));
+});
+
 test('수집 주문 합포장과 낱개 분리는 봇과 웹에서 같은 상자와 잔여 수량을 사용합니다', async t => {
   const first = '202611270200000001', second = '202611270200000002';
   const order = (productOrderId, quantity) => ({

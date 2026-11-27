@@ -69,6 +69,7 @@ main.board-layout { max-width: 1920px; margin: 0 auto; padding: 20px 28px; displ
 .list-heading p { margin: 0; }
 .registered-heading { flex-wrap: wrap; }
 .registered-heading h2 { margin: 0; color: var(--navy); font-size: 16px; }
+.registered-info { display: grid; gap: 4px; }
 .registered-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
 #registered-section { margin-bottom: 18px; }
 #updated-at { white-space: nowrap; font-variant-numeric: tabular-nums; }
@@ -93,6 +94,13 @@ main.board-layout { max-width: 1920px; margin: 0 auto; padding: 20px 28px; displ
 .shipment-table tr:last-child td { border-bottom: 0; }
 .shipment-table th:first-child { width: 22%; }
 .shipment-table th:nth-child(2) { width: 32%; }
+.shipment-table .is-canceled s { color: #646b7c; }
+.shipment-table .dispatch-status, .shipment-table .dispatch-reason { display: block; margin-top: 4px; font-size: 11px; }
+.shipment-table .dispatch-status { font-weight: 600; }
+.shipment-table .is-hold td { background: #f9f0de; }
+.shipment-table .is-hold .dispatch-reason { color: #765923; }
+.shipment-card.is-canceled { background: #f0f0ef; border-color: #d9dbde; border-left-color: #a6aab2; }
+.shipment-card.is-canceled .shipment-name h2 { color: #626977; }
 .shipment-card.is-unprepared, .shipment-card.is-attention { background: #f9f0de; border-color: #e9d8b0; border-left-color: #b89b61; }
 .shipment-card.is-unprepared .item-status, .shipment-card.is-attention .item-status { color: #80692f; }
 .shipment-card.is-complete { background: #f0f0ef; border-color: #d9dbde; border-left-color: #a6aab2; }
