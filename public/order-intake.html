@@ -7,8 +7,9 @@
   <link rel="icon" type="image/svg+xml" href="/assets/brand-star.svg">
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/order-intake.css">
+  <link rel="stylesheet" href="/order-packing.css">
   <script src="/navigation.js" defer></script>
-  <script src="/order-intake.js" defer></script>
+  <script src="/order-intake.js" type="module"></script>
 </head>
 <body class="order-intake">
   <header class="header">
@@ -19,8 +20,6 @@
     <div class="intake-heading">
       <h1>주문 수집</h1>
       <div class="intake-actions">
-        <a class="intake-link" href="/shipping-board.html?mode=collected">준비 수량 보기</a>
-        <a class="intake-link" href="/order-packing.html">포장 작업</a>
         <div class="intake-range"><label for="collection-range">결제 기간</label>
           <select id="collection-range">
             <option value="7">최근 7일</option>
@@ -30,6 +29,8 @@
           </select>
         </div>
         <button id="collect-button" class="primary" type="button">네이버 주문 가져오기</button>
+        <button id="coupang-button" type="button">쿠팡 파일 업로드</button>
+        <input id="coupang-file" type="file" accept=".xlsx" hidden>
       </div>
     </div>
     <div id="intake-message" class="message" role="status" hidden></div>
@@ -41,13 +42,51 @@
         </div>
         <button id="retry-button" type="button" hidden>상품명 정리 재시도</button>
       </div>
-      <div id="intake-table-wrap" class="table-wrap" hidden>
-        <table class="intake-table">
-          <thead><tr><th scope="col">판매채널 · 상품주문번호</th><th scope="col">제품명 원본 · 옵션</th><th scope="col">정리된 제품명 · 바코드</th><th scope="col">잔여 수량</th><th scope="col">상태</th></tr></thead>
-          <tbody id="intake-rows"></tbody>
-        </table>
-      </div>
+      <form id="pack-form">
+        <fieldset id="pick-controls" disabled>
+          <table id="intake-table" class="intake-table" hidden>
+            <thead><tr><th scope="col">채널 · 주문번호 · 수취인</th><th scope="col">제품명 원본 · 옵션</th><th scope="col">정리된 제품명 · 바코드</th><th scope="col">잔여</th><th scope="col">상태</th><th scope="col">상자에 담기</th></tr></thead>
+            <tbody id="intake-rows"></tbody>
+          </table>
+        </fieldset>
+      </form>
       <p id="intake-empty" class="intake-empty">수집한 주문을 불러오는 중입니다.</p>
+      <div id="pack-actions" class="pack-actions" hidden>
+        <p id="packing-summary" class="pack-summary"></p>
+        <button id="reload-packing" type="button" disabled>목록 새로고침</button>
+        <button id="add-box" type="submit" form="pack-form" disabled>선택 상품 상자 만들기</button>
+      </div>
+    </section>
+    <div id="packing" class="pack-layout" hidden>
+      <section id="packing-preview" class="review-card pack-preview" aria-labelledby="packing-preview-title" hidden>
+        <div class="pack-section-heading"><h2 id="packing-preview-title">저장할 포장 변경</h2></div>
+        <p id="preview-summary" class="pack-summary"></p>
+        <fieldset id="preview-controls" disabled>
+          <ul id="draft-boxes" class="pack-list"></ul>
+          <div class="pack-actions">
+            <button id="discard-changes" type="button">변경 취소</button>
+            <button id="save-packing" class="primary" type="button">포장 변경 저장</button>
+          </div>
+        </fieldset>
+      </section>
+      <section id="saved-section" class="review-card" aria-labelledby="saved-boxes-title" hidden>
+        <div class="pack-section-heading"><h2 id="saved-boxes-title">저장한 상자</h2><span id="saved-count"></span></div>
+        <fieldset id="saved-controls" disabled><ul id="saved-boxes" class="pack-list"></ul></fieldset>
+      </section>
+    </div>
+    <section id="dispatch-section" class="review-card dispatch-section" aria-labelledby="dispatch-title" hidden>
+      <div class="pack-section-heading"><h2 id="dispatch-title">출고 등록</h2><span id="dispatch-available"></span></div>
+      <div id="dispatch-actions" class="pack-actions">
+        <button id="open-dispatch" type="button" class="primary" disabled>출고 등록</button>
+      </div>
+      <fieldset id="dispatch-preview" hidden>
+        <p id="dispatch-selected" class="pack-summary" aria-live="polite"></p>
+        <ul id="dispatch-choices" class="pack-list"></ul>
+        <div class="pack-actions">
+          <button id="cancel-dispatch" type="button">닫기</button>
+          <button id="confirm-dispatch" type="button" class="primary">선택한 상자 등록</button>
+        </div>
+      </fieldset>
     </section>
     <dialog id="order-review" class="intake-review" aria-labelledby="review-title">
       <form id="review-form">

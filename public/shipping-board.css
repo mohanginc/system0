@@ -50,8 +50,6 @@ main.board-layout { max-width: 1920px; margin: 0 auto; padding: 20px 28px; displ
 .board-heading h1 { margin: 0; font-size: 28px; font-weight: 700; line-height: 1.3; letter-spacing: -.8px; }
 .board-actions { display: flex; gap: 8px; }
 .board-actions button { font-size: 12px; padding: 10px 16px; }
-.board-link { display: inline-flex; align-items: center; justify-content: center; min-height: 40px; padding: 10px 16px; border: 1px solid #92928f; border-radius: 50px; font-size: 12px; line-height: 18px; white-space: nowrap; background: #fff; }
-.board-link:hover { background: var(--soft); }
 #refresh-button { background: var(--navy); border-color: var(--navy); color: #fff; }
 #refresh-button:hover:not(:disabled) { background: #243155; }
 .board-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 24px; border-top: 1px solid #dedfe5; border-bottom: 1px solid #dedfe5; padding: 15px 0; }
@@ -69,6 +67,8 @@ main.board-layout { max-width: 1920px; margin: 0 auto; padding: 20px 28px; displ
 .board-notices ul { margin: 0; padding-left: 16px; font-size: 12px; line-height: 1.8; }
 .list-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 17px 0 12px; color: var(--board-muted); font-size: 11px; }
 .list-heading p { margin: 0; }
+.registered-heading h2 { margin: 0; color: var(--navy); font-size: 16px; }
+#registered-section { margin-bottom: 18px; }
 #updated-at { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .shipment-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 560px), 1fr)); gap: 12px; align-items: start; }
 .shipment-card { border: 1px solid var(--board-rose-line); border-left: 4px solid #db91ac; border-radius: 12px; background: var(--board-rose); overflow: hidden; }
@@ -119,7 +119,6 @@ html:fullscreen .bundle-number strong { font-size: 62px; }
   .board-heading h1 { font-size: 23px; }
   .board-actions { flex-direction: column; gap: 5px; }
   .board-actions button { min-height: 34px; padding: 7px 12px; font-size: 11px; }
-  .board-link { padding: 7px 12px; font-size: 11px; }
   .board-summary { gap: 12px; }
   .summary-count { padding-right: 12px; gap: 8px; }
   .summary-count span { font-size: 10px; }

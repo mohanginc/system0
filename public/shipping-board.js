@@ -6,8 +6,8 @@ let selectedDate = workDate(), calendarMonth = selectedDate.slice(0, 7), selecte
 let calendarData = { days: [] }, boardData = null, busy = false;
 const calendarRequests = new Map();
 let calendarRequestVersion = 0;
-let mode = 'confirmed', previewData = null, collectedData = null;
-const messages = { confirmed: { text: '', error: false }, new: { text: '', error: false }, collected: { text: '', error: false } };
+let mode = 'confirmed', previewData = null;
+const messages = { confirmed: { text: '', error: false }, new: { text: '', error: false } };
 const formatTime = value => new Date(value).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul',
   year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
 const invoiceState = state => ['unavailable', 'pending', 'complete'].includes(state) ? state : 'unavailable';
@@ -46,13 +46,16 @@ function renderCalendar() {
   for (let index = 0; index < firstDay; index++) fragment.append(element('span'));
   for (let day = 1; day <= lastDay; day++) {
     const date = `${calendarMonth}-${String(day).padStart(2, '0')}`, record = days.get(date);
+    const jobLabels = [];
+    if (record?.batchCount) jobLabels.push(`작업 ${record.batchCount}개`);
+    if (record?.registeredCount) jobLabels.push(`등록 상자 ${record.registeredCount}개`);
     const button = element('button', String(day), 'calendar-day');
     button.type = 'button'; button.dataset.date = date; button.disabled = busy;
     button.classList.toggle('is-today', date === workDate());
-    button.classList.toggle('has-jobs', Boolean(record?.batchCount));
+    button.classList.toggle('has-jobs', jobLabels.length > 0);
     button.dataset.invoiceState = invoiceState(record?.invoiceState);
     button.setAttribute('aria-pressed', String(date === selectedDate));
-    button.setAttribute('aria-label', `${year}년 ${month}월 ${day}일${record?.batchCount ? `, 작업 ${record.batchCount}개` : ', 작업 없음'}`);
+    button.setAttribute('aria-label', `${year}년 ${month}월 ${day}일, ${jobLabels.join(', ') || '작업 없음'}`);
     button.addEventListener('click', () => { if (!busy) selectDay(date); });
     fragment.append(button);
   }
@@ -61,11 +64,14 @@ function renderCalendar() {
 function renderJobs(data) {
   $('job-count').textContent = `${count(data.batches.length)}개`;
   const fragment = document.createDocumentFragment();
-  if (!data.batches.length) fragment.append(element('p', '이 날짜에 저장된 작업이 없습니다.', 'job-empty'));
+  if (!data.batches.length) fragment.append(element('p', data.registered?.boxCount
+    ? `등록 상자 ${count(data.registered.boxCount)}개` : '이 날짜에 저장된 작업이 없습니다.', 'job-empty'));
   else {
     const all = element('button', undefined, 'job-button'); all.type = 'button'; all.dataset.batchId = '';
     all.setAttribute('aria-pressed', String(selectedBatchId === null));
-    all.append(element('strong', '모든 작업 모아 보기'), element('small', `작업 ${count(data.batches.length)}개`));
+    const description = [`작업 ${count(data.batches.length)}개`];
+    if (data.registered?.boxCount) description.push(`등록 상자 ${count(data.registered.boxCount)}개`);
+    all.append(element('strong', '모든 작업 모아 보기'), element('small', description.join(' · ')));
     all.addEventListener('click', () => selectBatch(null)); fragment.append(all);
     for (const batch of data.batches) {
       const button = element('button', undefined, 'job-button'); button.type = 'button'; button.dataset.batchId = String(batch.id);
@@ -78,7 +84,7 @@ function renderJobs(data) {
   $('job-list').replaceChildren(fragment);
 }
 function renderGroup(group, open, view = 'confirmed') {
-  const collected = view === 'collected', quantityView = view !== 'confirmed';
+  const registered = view === 'registered', quantityView = view !== 'confirmed';
   const complete = invoiceState(group.invoiceState) === 'complete' && !group.unprepared && !group.needsAttention;
   const details = element('details', undefined, 'shipment-card'); details.dataset.key = group.key;
   details.dataset.invoiceState = invoiceState(group.invoiceState); details.open = open;
@@ -88,31 +94,30 @@ function renderGroup(group, open, view = 'confirmed') {
   name.append(element('h2', group.name || '상품명 미정리'));
   const barcode = group.skuBarcode ? `바코드 ${group.skuBarcode}` : '바코드 없음';
   name.append(element('small', barcode + (group.shipmentType === 'exchange' ? ' · 맞교환' : ''), 'sku-barcode'));
-  let status = group.needsAttention ? (quantityView ? '상품명 확인이 필요합니다. 상세 목록의 사유를 확인하세요.' : '출고 정보 확인이 필요합니다.') : group.unprepared ? '상품명 정리가 필요합니다.'
+  const status = group.needsAttention ? (quantityView ? '상품명 확인이 필요합니다. 상세 목록의 사유를 확인하세요.' : '출고 정보 확인이 필요합니다.') : group.unprepared ? '상품명 정리가 필요합니다.'
     : complete ? '몰 송장 등록 확인 완료' : invoiceState(group.invoiceState) === 'pending' ? '송장 등록 확인 필요' : '';
-  if (collected) status = group.unprepared ? '상품명 미정리' : group.needsAttention && group.skuBarcode ? '상품명 확인 필요' : '';
   if (status) name.append(element('span', status, 'item-status'));
   const quantity = element('div', undefined, 'bundle-number');
-  quantity.append(element('strong', count(group.count)), element('span', quantityView ? '개' : '묶음'));
+  quantity.append(element('strong', count(registered ? group.quantity : group.count)), element('span', quantityView ? '개' : '묶음'));
   const arrow = element('span', undefined, 'expand-arrow'); arrow.setAttribute('aria-hidden', 'true');
   summary.append(name, quantity, arrow); details.append(summary);
   const container = element('div', undefined, 'shipment-details'), table = element('table', undefined, 'shipment-table');
-  table.setAttribute('aria-label', `${group.name || '미정리 항목'} ${collected ? '준비 주문 목록' : '상세 출고 목록'}`);
+  table.setAttribute('aria-label', `${group.name || '미정리 항목'} 상세 출고 목록`);
   const header = table.createTHead().insertRow();
-  const headings = collected ? ['판매채널', '상품주문번호', '수량'] : ['수취인', '전화번호', '동네'];
-  if (view === 'new') headings.push('수량');
+  const headings = registered ? ['상자', '수취인'] : ['수취인', '전화번호', '동네'];
+  if (quantityView) headings.push('수량');
   for (const label of headings) {
     const th = element('th', label); th.scope = 'col'; header.append(th);
   }
   const body = table.createTBody();
   for (const shipment of group.shipments) {
     const row = body.insertRow();
-    const data = collected ? [{ naver: '네이버', coupang: '쿠팡' }[shipment.provider] || shipment.provider || '—', shipment.productOrderId]
+    const data = registered ? [`상자 ${shipment.boxId}`, shipment.recipient || '미등록']
       : [shipment.recipient || '미등록', shipment.phone || '미등록', shipment.neighborhood || '지역 정보 없음'];
     for (const value of data) row.insertCell().textContent = value;
     if (quantityView) {
       row.insertCell().textContent = count(shipment.quantity);
-      if (shipment.note) row.cells[collected ? 1 : 0].append(element('small', shipment.note, 'review-reason'));
+      if (shipment.note) row.cells[0].append(element('small', shipment.note, 'review-reason'));
     }
   }
   container.append(table); details.append(container); return details;
@@ -120,13 +125,17 @@ function renderGroup(group, open, view = 'confirmed') {
 function renderBoard(data) {
   const sameScope = boardData?.date === data.date && boardData?.selectedBatchId === data.selectedBatchId;
   const open = sameScope ? new Set([...$('shipment-groups').querySelectorAll('details[open]')].map(node => node.dataset.key)) : new Set();
+  const openRegistered = sameScope ? new Set([...$('registered-groups').querySelectorAll('details[open]')].map(node => node.dataset.key)) : new Set();
+  const registeredGroups = data.registered?.groups || [];
   boardData = data; selectedBatchId = data.selectedBatchId;
   $('quantity-label').textContent = '출고 묶음'; $('attention-label').textContent = '미정리 묶음';
-  $('board-footnote').textContent = '수량은 원본 주문 행 기준이며 실제 합포장 확정 상자 수는 아닙니다. 한 행에 여러 제품이 포함될 수 있습니다.';
+  $('board-footnote').textContent = data.groups.length ? '기존 엑셀의 출고 묶음은 원본 주문 행 단위입니다.' : '';
   const [year, month, day] = data.date.split('-');
   $('board-date').textContent = `${year}.${month}.${day} · ${selectedBatchId === null ? '모든 작업' : '선택한 작업'}`;
   $('board-title').textContent = `${Number(month)}월 ${Number(day)}일 출고 목록`;
-  for (const [id, key] of [['bundle-count', 'bundleCount'], ['group-count', 'groupCount'], ['unprepared-count', 'unpreparedCount']]) $(id).textContent = count(data.summary[key]);
+  $('bundle-count').textContent = count(data.summary.bundleCount);
+  $('group-count').textContent = count(data.summary.groupCount);
+  $('unprepared-count').textContent = count(data.summary.unpreparedCount);
   const state = invoiceState(data.invoiceState);
   $('invoice-status').textContent = state === 'complete' ? '몰 송장 등록 확인 완료' : state === 'pending' ? '송장 등록 확인 필요' : '송장 정보 연결 전';
   $('invoice-description').textContent = state === 'unavailable' ? '송장 처리 화면에서 파일을 연결하고 등록 상태를 확인하세요.' : '몰 등록이 모두 확인된 항목은 회색입니다. 실물 상차 여부와는 별개입니다.';
@@ -137,7 +146,10 @@ function renderBoard(data) {
   const groups = document.createDocumentFragment();
   for (const group of data.groups) groups.append(renderGroup(group, open.has(group.key)));
   $('shipment-groups').replaceChildren(groups);
-  $('board-empty').hidden = Boolean(data.groups.length);
+  $('registered-section').hidden = !data.registered?.boxCount;
+  $('registered-count').textContent = `상자 ${count(data.registered?.boxCount)}개`;
+  $('registered-groups').replaceChildren(...registeredGroups.map(group => renderGroup(group, openRegistered.has(group.key), 'registered')));
+  $('board-empty').hidden = Boolean(data.groups.length || data.registered?.boxCount);
   $('empty-title').textContent = data.batches.length ? '표시할 출고 묶음이 없습니다.' : '이 날짜에 저장된 작업이 없습니다.';
   $('empty-description').textContent = data.batches.length ? '선택한 작업의 남아 있는 주문을 확인하세요.' : '달력에서 작업이 있는 날짜를 선택하세요.';
   $('updated-at').textContent = `${new Date().toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', hour12: false })} 조회`;
@@ -158,6 +170,7 @@ function renderPreview(data) {
     : '조회 범위: 결제 시각 기준 최근 7일. 갱신 버튼을 눌러 현재 발주 미확인 주문을 조회하세요.';
   $('updated-at').textContent = data ? `마지막 성공: ${formatTime(data.updatedAt)}` : '아직 조회하지 않음';
   $('board-notices').hidden = true;
+  $('registered-section').hidden = true;
   const groups = document.createDocumentFragment();
   for (const group of data?.groups || []) groups.append(renderGroup(group, open.has(group.key), 'new'));
   $('shipment-groups').replaceChildren(groups);
@@ -166,50 +179,16 @@ function renderPreview(data) {
   $('empty-description').textContent = data ? '새 주문은 갱신 버튼을 눌러 확인할 수 있습니다.' : '갱신하면 상품명 정리까지 진행합니다. 주문 상태는 바뀌지 않습니다.';
   $('board-footnote').textContent = '부분 취소를 반영한 상품주문별 잔여 수량입니다. 합포장 상자 수가 아니며, 발주확인은 주문 수집 담당자가 별도로 처리합니다. 조회 결과는 저장하지 않아 화면을 다시 열면 재조회가 필요합니다.';
 }
-function renderCollected(data) {
-  const open = new Set([...$('shipment-groups').querySelectorAll('details[open]')].map(node => node.dataset.key));
-  const summary = data?.summary;
-  $('board-date').textContent = '수집한 발주 미확인 주문';
-  $('board-title').textContent = '출고 준비 수량';
-  $('quantity-label').textContent = '준비 수량'; $('attention-label').textContent = '확인 필요 수량';
-  for (const [id, key] of [['bundle-count', 'quantity'], ['group-count', 'groupCount'], ['unprepared-count', 'attentionQuantity']]) {
-    $(id).textContent = summary ? count(summary[key]) : '—';
-  }
-  const packing = data?.packing;
-  $('invoice-status').textContent = packing ? `구성한 상자 ${count(packing.boxCount)}개` : '수량 단위 · 개';
-  $('invoice-description').textContent = packing ? `미배정 상품 ${count(packing.unallocatedQuantity)}개` : '';
-  const notices = [];
-  if (summary?.heldCount) notices.push(element('li', `보류 ${count(summary.heldCount)}건은 수집 주문에서 확인하세요.`));
-  if (summary?.unverifiedCount) notices.push(element('li', `주문 상태 미확인 ${count(summary.unverifiedCount)}건은 준비 수량에서 제외했습니다.`));
-  if (packing?.reviewBoxCount) notices.push(element('li', `상자 ${count(packing.reviewBoxCount)}개는 주문이 바뀌었거나 배송지를 확인해야 합니다.`));
-  $('notice-list').replaceChildren(...notices);
-  $('board-notices').hidden = !notices.length;
-  $('shipment-groups').replaceChildren(...(data?.groups || []).map(group => renderGroup(group, open.has(group.key), 'collected')));
-  $('board-empty').hidden = !data || Boolean(data.groups?.length);
-  $('empty-title').textContent = data?.updatedAt ? '준비할 발주 미확인 주문이 없습니다.' : '수집한 주문이 없습니다.';
-  $('empty-description').textContent = '주문 수집에서 최신 주문을 가져올 수 있습니다.';
-  $('updated-at').textContent = data ? (data.updatedAt ? `${formatTime(data.updatedAt)} 수집` : '아직 수집하지 않음') : '조회 중';
-  $('board-footnote').textContent = '발주 미확인 상품의 잔여 수량입니다. 확인한 주문의 출고 묶음은 별도 탭에서 확인할 수 있습니다.';
-}
 function selectMode(next) {
   if (busy || mode === next) return;
   mode = next;
   document.body.classList.toggle('is-new', mode !== 'confirmed');
   $('confirmed-mode').setAttribute('aria-pressed', String(mode === 'confirmed'));
   $('new-mode').setAttribute('aria-pressed', String(mode === 'new'));
-  $('collected-mode').setAttribute('aria-pressed', String(mode === 'collected'));
-  $('collected-review-link').hidden = mode !== 'collected';
-  $('packing-link').hidden = mode !== 'collected';
   $('preview-range').hidden = mode !== 'new';
-  $('list-description').textContent = mode === 'collected' ? '상품명을 펼치면 상품주문번호와 수량을 볼 수 있습니다.'
-    : '상품명을 누르면 수취인·전화번호·동네가 펼쳐집니다.';
   const previous = messages[mode];
   message(previous.text, previous.error);
   if (mode === 'new') renderPreview(previewData);
-  else if (mode === 'collected') {
-    renderCollected(collectedData);
-    void loadCollected();
-  }
   else if (boardData) renderBoard(boardData);
   else {
     $('shipment-groups').replaceChildren(); $('board-notices').hidden = true;
@@ -223,17 +202,6 @@ function selectMode(next) {
     loadBoard({ reloadCalendar: true });
   }
   setBusy(busy);
-}
-async function loadCollected() {
-  if (busy) return;
-  setBusy(true); message('');
-  try {
-    const data = await api('/api/order-intake');
-    renderCollected(data); collectedData = data;
-  } catch (error) {
-    if (!collectedData) $('updated-at').textContent = '조회하지 못함';
-    message(`${error.message}${collectedData ? ' 마지막 조회 결과를 표시하고 있습니다.' : ''}`, true);
-  } finally { setBusy(false); }
 }
 async function refreshPreview() {
   if (busy) return;
@@ -301,9 +269,7 @@ $('today-button').addEventListener('click', () => {
 });
 $('confirmed-mode').addEventListener('click', () => selectMode('confirmed'));
 $('new-mode').addEventListener('click', () => selectMode('new'));
-$('collected-mode').addEventListener('click', () => selectMode('collected'));
 $('refresh-button').addEventListener('click', () => {
-  if (mode === 'collected') return loadCollected();
   if (mode === 'new') return refreshPreview();
   return loadBoard({ reloadCalendar: true });
 });
@@ -314,5 +280,11 @@ $('fullscreen-button').addEventListener('click', async () => {
   } catch { message('전체 화면을 열지 못했습니다. 브라우저의 F11 키도 사용할 수 있습니다.', true); }
 });
 document.addEventListener('fullscreenchange', () => { $('fullscreen-button').textContent = document.fullscreenElement ? '전체 화면 종료' : '전체 화면'; });
-if (new URLSearchParams(window.location.search).get('mode') === 'collected') selectMode('collected');
-else { renderCalendar(); loadBoard({ reloadCalendar: true }); }
+const requestedDate = new URLSearchParams(window.location.search).get('date');
+const requestedTime = /^\d{4}-\d{2}-\d{2}$/.test(requestedDate || '') && !requestedDate.startsWith('0000') ? Date.parse(requestedDate + 'T00:00:00Z') : NaN;
+if (Number.isFinite(requestedTime) && new Date(requestedTime).toISOString().slice(0, 10) === requestedDate) {
+  selectedDate = requestedDate;
+  calendarMonth = selectedDate.slice(0, 7);
+}
+renderCalendar();
+loadBoard({ reloadCalendar: true });

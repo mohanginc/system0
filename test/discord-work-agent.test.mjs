@@ -150,6 +150,32 @@ test('봇이 네이버 수집·검수·준비 수량 조회를 조합하고 웹�
   assert.ok(session.calls.some(call => call.route === '/api/order-intake/orders/' + rowId && call.method === 'PATCH'));
 });
 
+test('봇이 쿠팡 첨부 엑셀을 웹과 같은 주문 수집에 저장합니다', async t => {
+  const session = await boot(t);
+  const buffer = workbookBytes([
+    ['주문번호', '묶음배송번호', '옵션ID', '등록상품명', '등록옵션명', '구매수(수량)', '수취인이름', '수취인 주소', '운송장번호', '출고일(발송일)'],
+    ['000100', '000200', '000300', original[1][0], original[1][1], '2', '쿠팡 가상 수취인', '가상 배송지', '', ''],
+  ]);
+  const attachment = session.addAttachment({ name: '쿠팡 배송목록.xlsx', buffer });
+  const result = await session.run('첨부한 쿠팡 주문 엑셀을 가져와서 수집 목록에 넣어줘.', [
+    tool('import_coupang_orders', {}),
+    imported => {
+      assert.equal(imported.collection.added, 1);
+      assert.equal(imported.rows[0].provider, 'coupang');
+      return tool('read_collected_orders', { query: '쿠팡', offset: 0 });
+    },
+    viewed => {
+      assert.equal(viewed.rows[0].orderId, '000100');
+      assert.equal(viewed.preparationQuantity, 2);
+      return '쿠팡 상품주문 1건을 수집했습니다.';
+    },
+  ], [attachment]);
+  assert.match(result.content, /쿠팡 주문 저장/);
+  const stored = await (await session.web('/api/order-intake')).json();
+  assert.deepEqual(stored.orders.map(order => [order.provider, order.orderId, order.quantity]), [['coupang', '000100', 2]]);
+  assert.ok(!JSON.stringify(session.modelRequests).includes('가상 배송지'));
+});
+
 test('수집 주문 합포장과 낱개 분리는 봇과 웹에서 같은 상자와 잔여 수량을 사용합니다', async t => {
   const first = '202611270200000001', second = '202611270200000002';
   const order = (productOrderId, quantity) => ({
@@ -185,7 +211,7 @@ test('수집 주문 합포장과 낱개 분리는 봇과 웹에서 같은 상자
     },
   ]);
   assert.match(combined.content, /포장 저장 · 새 상자 2개/);
-  assert.match(combined.content, /\/order-packing\.html/);
+  assert.match(combined.content, /\/#packing/);
   assert.ok(!JSON.stringify(session.modelRequests).includes('가상 배송 상세'));
   const saved = await (await session.web(route)).json();
   const joined = saved.boxes.find(box => box.items.length === 2);
@@ -198,6 +224,38 @@ test('수집 주문 합포장과 낱개 분리는 봇과 웹에서 같은 상자
   assert.equal(split.summary.allocatedQuantity, 3);
   assert.equal(split.summary.unallocatedQuantity, 0);
   assert.deepEqual((await (await session.web('/api/order-intake')).json()).packing, split.summary);
+  let dispatchedDate;
+  const dispatched = await session.run(`${first}의 상자 하나를 system0에 출고 등록하고 출고보드와 수집 잔여를 확인해줘.`, [
+    tool('read_order_packing', { offset: 0, query: first }),
+    result => {
+      assert.equal(result.orders[0].productOrderId, first);
+      return tool('register_order_dispatch', { boxIds: [result.boxes[0].id], orderItemIds: [] });
+    },
+    result => {
+      assert.equal(result.registeredCount, 1);
+      assert.equal(result.registeredQuantity, 1);
+      dispatchedDate = result.date;
+      return tool('get_shipping_board', { date: dispatchedDate, batchId: null, search: null });
+    },
+    result => {
+      assert.equal(result.registered.boxCount, 1);
+      assert.equal(result.registered.quantity, 1);
+      return tool('read_collected_orders', { offset: 0, query: first });
+    },
+    result => {
+      assert.equal(result.rows[0].quantity, 1);
+      return '상자 1개를 출고 등록했고 잔여 1개가 있습니다.';
+    },
+  ]);
+  assert.match(dispatched.content, /출고 등록 · 상자 1개/);
+  assert.ok(dispatched.content.includes('/shipping-board.html?date=' + dispatchedDate));
+  const waiting = await (await session.web(route)).json();
+  const final = await (await session.web('/api/order-intake/dispatch', json('POST', {
+    expectedVersion: waiting.version, boxIds: waiting.boxes.map(box => box.id), orderItemIds: [],
+  }))).json();
+  assert.equal(final.registeredCount, 2);
+  assert.deepEqual((await (await session.web('/api/order-intake')).json()).orders, []);
+  assert.equal((await (await session.web('/api/shipping/board?date=' + final.date)).json()).registered.boxCount, 3);
   const page = await session.web('/order-packing.html');
   assert.match(await page.text(), /포장/);
 });

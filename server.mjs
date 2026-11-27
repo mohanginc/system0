@@ -15,8 +15,8 @@ import { shippingBoard, shippingDates } from './lib/shipping.mjs';
 import { createNaverClient } from './lib/naver.mjs';
 import { previewShippingBoard } from './lib/shipping-preview.mjs';
 import { productCatalog, addProduct, linkProductName, productCostHistory, addProductCost } from './lib/products.mjs';
-import { getOrderIntake, collectOrderIntake, normalizeOrderIntake, reviseOrderIntake } from './lib/order-intake.mjs';
-import { getOrderPacking, reviseOrderPacking } from './lib/order-packing.mjs';
+import { getOrderIntake, collectOrderIntake, normalizeOrderIntake, reviseOrderIntake, importCoupangOrders } from './lib/order-intake.mjs';
+import { getOrderPacking, reviseOrderPacking, registerOrderDispatch } from './lib/order-packing.mjs';
 import { CARRIERS, unlockNaverFiles, classifyInvoiceFiles, prepareInvoiceFile, importInvoiceFiles, listInvoiceRuns, listInvoiceDrafts, reviseInvoiceItems,
   exportInvoices, downloadInvoices, latestInvoice, refreshInvoiceStatus, refreshOutsideInvoiceStatus,
   invoiceView, invoiceSourceView, invoiceDateRunIds, checkInvoiceDate, applyInvoiceTrackingReview, confirmInvoiceTracking, lookupInvoiceOrder } from './lib/invoices.mjs';
@@ -342,7 +342,17 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
   };
   app.post('/api/order-intake/collect', runIntake(request => collectOrderIntake(db,
     { ...intakeOptions, lookbackDays: request.body?.lookbackDays })));
+  app.post('/api/order-intake/coupang', upload.single('file'), runIntake(request => importCoupangOrders(db,
+    { client: ai, model, file: request.file })));
   app.post('/api/order-intake/normalize', runIntake(() => normalizeOrderIntake(db, intakeOptions)));
+  app.post('/api/order-intake/dispatch', (request, response) => {
+    if (intakeRunning) return response.status(409).json({ error: '주문 수집·상품명 정리가 진행 중입니다.' });
+    try { response.json(registerOrderDispatch(db, request.body || {})); }
+    catch (error) {
+      if (error.status === 409) response.status(409).json({ error: error.message });
+      else throw error;
+    }
+  });
   app.patch('/api/order-intake/orders/:id', (request, response) => {
     if (intakeRunning) return response.status(409).json({ error: '주문 수집·상품명 정리가 진행 중입니다.' });
     try { response.json(reviseOrderIntake(db, idFrom(request), request.body || {})); }
@@ -409,6 +419,7 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
   app.get('/', (request, response) => response.sendFile(
     Object.hasOwn(request.query, 'batch') ? 'index.html' : 'order-intake.html', { root: publicRoot }));
   app.get('/product-names', (_request, response) => response.sendFile('index.html', { root: publicRoot }));
+  app.get('/order-packing.html', (_request, response) => response.redirect('/#packing'));
   app.use(express.static(publicRoot, { dotfiles: 'deny' }));
   app.use((error, _request, response, _next) => {
     const uploadErrors = {
