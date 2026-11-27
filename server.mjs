@@ -16,6 +16,7 @@ import { createNaverClient } from './lib/naver.mjs';
 import { previewShippingBoard } from './lib/shipping-preview.mjs';
 import { productCatalog, addProduct, linkProductName, productCostHistory, addProductCost } from './lib/products.mjs';
 import { getOrderIntake, collectOrderIntake, normalizeOrderIntake, reviseOrderIntake } from './lib/order-intake.mjs';
+import { getOrderPacking, reviseOrderPacking } from './lib/order-packing.mjs';
 import { CARRIERS, unlockNaverFiles, classifyInvoiceFiles, prepareInvoiceFile, importInvoiceFiles, listInvoiceRuns, listInvoiceDrafts, reviseInvoiceItems,
   exportInvoices, downloadInvoices, latestInvoice, refreshInvoiceStatus, refreshOutsideInvoiceStatus,
   invoiceView, invoiceSourceView, invoiceDateRunIds, checkInvoiceDate, applyInvoiceTrackingReview, confirmInvoiceTracking, lookupInvoiceOrder } from './lib/invoices.mjs';
@@ -320,7 +321,18 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
     finally { previewRunning = false; }
   });
   app.use('/api/order-intake', (_request, response, next) => { response.set('Cache-Control', 'no-store'); next(); });
-  app.get('/api/order-intake', (_request, response) => response.json({ ...getOrderIntake(db), running: intakeRunning }));
+  app.get('/api/order-intake', (_request, response) => response.json({
+    ...getOrderIntake(db), packing: getOrderPacking(db).summary, running: intakeRunning,
+  }));
+  app.get('/api/order-intake/packing', (_request, response) => response.json(getOrderPacking(db)));
+  app.patch('/api/order-intake/packing', (request, response) => {
+    if (intakeRunning) return response.status(409).json({ error: '주문 수집·상품명 정리가 진행 중입니다.' });
+    try { response.json(reviseOrderPacking(db, request.body || {})); }
+    catch (error) {
+      if (error.status === 409) response.status(409).json({ error: error.message });
+      else throw error;
+    }
+  });
   const intakeOptions = { naver, client: ai, model };
   const runIntake = operation => async (request, response) => {
     if (intakeRunning) return response.status(409).json({ error: '주문 수집·상품명 정리가 진행 중입니다.' });

@@ -9,7 +9,8 @@
   ];
   const { pathname, search } = window.location;
   const productReview = pathname === '/index.html' || (pathname === '/' && new URLSearchParams(search).has('batch'));
-  const current = productReview ? '/product-names' : pathname === '/order-intake.html' ? '/' : pathname;
+  const orderIntake = ['/order-intake.html', '/order-packing.html'].includes(pathname);
+  const current = productReview ? '/product-names' : orderIntake ? '/' : pathname;
   for (const nav of document.querySelectorAll('.app-nav')) {
     nav.replaceChildren(...pages.map(([href, title]) => {
       const link = document.createElement('a');

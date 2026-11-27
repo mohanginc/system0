@@ -175,11 +175,13 @@ function renderCollected(data) {
   for (const [id, key] of [['bundle-count', 'quantity'], ['group-count', 'groupCount'], ['unprepared-count', 'attentionQuantity']]) {
     $(id).textContent = summary ? count(summary[key]) : '—';
   }
-  $('invoice-status').textContent = '수량 단위 · 개';
-  $('invoice-description').textContent = '';
+  const packing = data?.packing;
+  $('invoice-status').textContent = packing ? `구성한 상자 ${count(packing.boxCount)}개` : '수량 단위 · 개';
+  $('invoice-description').textContent = packing ? `미배정 상품 ${count(packing.unallocatedQuantity)}개` : '';
   const notices = [];
   if (summary?.heldCount) notices.push(element('li', `보류 ${count(summary.heldCount)}건은 수집 주문에서 확인하세요.`));
   if (summary?.unverifiedCount) notices.push(element('li', `주문 상태 미확인 ${count(summary.unverifiedCount)}건은 준비 수량에서 제외했습니다.`));
+  if (packing?.reviewBoxCount) notices.push(element('li', `상자 ${count(packing.reviewBoxCount)}개는 주문이 바뀌었거나 배송지를 확인해야 합니다.`));
   $('notice-list').replaceChildren(...notices);
   $('board-notices').hidden = !notices.length;
   $('shipment-groups').replaceChildren(...(data?.groups || []).map(group => renderGroup(group, open.has(group.key), 'collected')));
@@ -197,6 +199,7 @@ function selectMode(next) {
   $('new-mode').setAttribute('aria-pressed', String(mode === 'new'));
   $('collected-mode').setAttribute('aria-pressed', String(mode === 'collected'));
   $('collected-review-link').hidden = mode !== 'collected';
+  $('packing-link').hidden = mode !== 'collected';
   $('preview-range').hidden = mode !== 'new';
   $('list-description').textContent = mode === 'collected' ? '상품명을 펼치면 상품주문번호와 수량을 볼 수 있습니다.'
     : '상품명을 누르면 수취인·전화번호·동네가 펼쳐집니다.';

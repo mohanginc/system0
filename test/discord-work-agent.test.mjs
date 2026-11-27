@@ -150,6 +150,58 @@ test('봇이 네이버 수집·검수·준비 수량 조회를 조합하고 웹�
   assert.ok(session.calls.some(call => call.route === '/api/order-intake/orders/' + rowId && call.method === 'PATCH'));
 });
 
+test('수집 주문 합포장과 낱개 분리는 봇과 웹에서 같은 상자와 잔여 수량을 사용합니다', async t => {
+  const first = '202611270200000001', second = '202611270200000002';
+  const order = (productOrderId, quantity) => ({
+    productOrderId, orderId: productOrderId, quantity,
+    originalName: original[1][0], productName: original[1][0], optionName: original[1][1],
+    sourcePayload: { content: { productOrder: { shippingAddress: {
+      name: '포장 테스트 수령인', zipCode: '12345', baseAddress: '서울 가상 배송 주소',
+      detailedAddress: '가상 배송 상세', tel1: '010-9000-0001',
+    } } } },
+  });
+  const session = await boot(t, { naver: { async listNewOrders() {
+    return { from: '2026-11-20T00:00:00Z', to: '2026-11-27T00:00:00Z', orders: [order(first, 2), order(second, 1)] };
+  } } });
+  await session.web('/api/order-intake/collect', json('POST', {}));
+  const route = '/api/order-intake/packing';
+  const initial = await (await session.web(route)).json();
+  const firstId = initial.orders.find(row => row.productOrderId === first).id;
+  const secondId = initial.orders.find(row => row.productOrderId === second).id;
+  const item = (orderItemId, quantity = 1) => ({ orderItemId, quantity });
+  const combined = await session.run(`${first} 2개 중 1개와 ${second} 1개를 같은 상자에 넣고, 남은 1개는 다른 상자로 저장해줘.`, [
+    tool('read_order_packing', { offset: 0, query: null }),
+    result => {
+      assert.equal(result.summary.unallocatedQuantity, 3);
+      assert.ok(result.orders.every(order => order.destinationReady));
+      return tool('save_order_packing', { removeBoxIds: [], boxes: [
+        { items: [item(firstId), item(secondId)] }, { items: [item(firstId)] },
+      ] });
+    },
+    result => {
+      assert.equal(result.summary.boxCount, 2);
+      assert.equal(result.summary.unallocatedQuantity, 0);
+      return '두 상자의 포장 구성을 저장했습니다.';
+    },
+  ]);
+  assert.match(combined.content, /포장 저장 · 새 상자 2개/);
+  assert.match(combined.content, /\/order-packing\.html/);
+  assert.ok(!JSON.stringify(session.modelRequests).includes('가상 배송 상세'));
+  const saved = await (await session.web(route)).json();
+  const joined = saved.boxes.find(box => box.items.length === 2);
+  assert.ok(joined);
+  const split = await (await session.web(route, json('PATCH', {
+    expectedVersion: saved.version, removeBoxIds: [joined.id],
+    boxes: [{ items: [item(firstId)] }, { items: [item(secondId)] }],
+  }))).json();
+  assert.equal(split.summary.boxCount, 3);
+  assert.equal(split.summary.allocatedQuantity, 3);
+  assert.equal(split.summary.unallocatedQuantity, 0);
+  assert.deepEqual((await (await session.web('/api/order-intake')).json()).packing, split.summary);
+  const page = await session.web('/order-packing.html');
+  assert.match(await page.text(), /포장/);
+});
+
 test('디스코드 주문 첨부, 정리, 검수, 엑셀이 웹과 같은 작업과 원본 값을 사용합니다', async t => {
   const session = await boot(t);
   let batchId;
