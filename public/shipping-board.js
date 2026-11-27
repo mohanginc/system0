@@ -26,7 +26,7 @@ function message(text, error = false) {
 }
 function setBusy(value) {
   busy = value;
-  for (const button of document.querySelectorAll('.board-sidebar button, .board-modes button, #refresh-button')) button.disabled = value;
+  for (const button of document.querySelectorAll('.board-sidebar button, .board-modes button, #refresh-button, #logen-export-button')) button.disabled = value;
   $('shipment-groups').setAttribute('aria-busy', String(value));
   $('refresh-button').textContent = value ? (mode === 'new' ? '조회·상품명 정리 중…' : '조회 중…') : (mode === 'new' ? '갱신' : '새로고침');
 }
@@ -150,6 +150,7 @@ function renderBoard(data) {
   for (const group of data.groups) groups.append(renderGroup(group, open.has(group.key)));
   $('shipment-groups').replaceChildren(groups);
   $('registered-section').hidden = !data.registered?.boxCount;
+  $('logen-export-button').hidden = selectedBatchId !== null || !data.registered?.boxCount;
   $('registered-count').textContent = `상자 ${count(data.registered?.boxCount)}개`;
   $('registered-groups').replaceChildren(...registeredGroups.map(group => renderGroup(group, openRegistered.has(group.key), 'registered')));
   $('board-empty').hidden = Boolean(data.groups.length || data.registered?.boxCount);
@@ -216,6 +217,29 @@ async function refreshPreview() {
     message(`${error.name === 'TimeoutError' ? '조회·상품명 정리가 지연되고 있습니다.' : error.message}${previewData ? ' 갱신하지 못해 마지막 성공 결과를 표시하고 있습니다.' : ' 조회를 완료하지 못했습니다. 다시 갱신해 주세요.'}`, true);
   } finally { setBusy(false); }
 }
+async function downloadLogenWorkbook() {
+  if (busy || mode !== 'confirmed' || selectedBatchId !== null || boardData?.date !== selectedDate || !boardData?.registered?.boxCount) return;
+  const date = boardData.date, button = $('logen-export-button'), label = button.textContent;
+  setBusy(true); message('');
+  button.textContent = '엑셀 준비 중…';
+  try {
+    const query = new URLSearchParams({ date });
+    const response = await fetch(`/api/shipping/logen-export?${query}`, { cache: 'no-store', signal: AbortSignal.timeout(30000) });
+    if (!response.ok) {
+      const error = await response.json().catch(() => ({}));
+      throw new Error(error.error || '로젠 업로드 엑셀을 만들지 못했습니다.');
+    }
+    const disposition = response.headers.get('content-disposition') || '';
+    const encoded = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+    const filename = encoded ? decodeURIComponent(encoded[1]) : `로젠_업로드_${date}.xlsx`;
+    const link = element('a'), url = URL.createObjectURL(await response.blob());
+    link.href = url; link.download = filename;
+    document.body.append(link); link.click(); link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  } catch (error) {
+    message(error.name === 'TimeoutError' ? '엑셀을 준비하는 데 시간이 걸립니다. 다시 시도해 주세요.' : error.message, true);
+  } finally { button.textContent = label; setBusy(false); }
+}
 async function loadBoard({ reloadCalendar = false } = {}) {
   if (busy) return;
   setBusy(true); message('');
@@ -272,6 +296,7 @@ $('today-button').addEventListener('click', () => {
 });
 $('confirmed-mode').addEventListener('click', () => selectMode('confirmed'));
 $('new-mode').addEventListener('click', () => selectMode('new'));
+$('logen-export-button').addEventListener('click', downloadLogenWorkbook);
 $('refresh-button').addEventListener('click', () => {
   if (mode === 'new') return refreshPreview();
   return loadBoard({ reloadCalendar: true });

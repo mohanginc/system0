@@ -67,7 +67,9 @@ main.board-layout { max-width: 1920px; margin: 0 auto; padding: 20px 28px; displ
 .board-notices ul { margin: 0; padding-left: 16px; font-size: 12px; line-height: 1.8; }
 .list-heading { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 17px 0 12px; color: var(--board-muted); font-size: 11px; }
 .list-heading p { margin: 0; }
+.registered-heading { flex-wrap: wrap; }
 .registered-heading h2 { margin: 0; color: var(--navy); font-size: 16px; }
+.registered-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; align-items: center; gap: 8px; }
 #registered-section { margin-bottom: 18px; }
 #updated-at { white-space: nowrap; font-variant-numeric: tabular-nums; }
 .shipment-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 560px), 1fr)); gap: 12px; align-items: start; }

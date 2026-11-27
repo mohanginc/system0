@@ -83,6 +83,7 @@ async function boot(t, options = {}) {
   const fetcher = (url, options) => {
     const requestUrl = new URL(url);
     const call = { route: requestUrl.pathname, method: options?.method || 'GET' };
+    if (call.route === '/api/shipping/logen-export') call.format = requestUrl.searchParams.get('format');
     calls.push(call);
     if (cdn.has(url)) {
       assert.equal(options.redirect, 'error');
@@ -174,6 +175,40 @@ test('봇이 쿠팡 첨부 엑셀을 웹과 같은 주문 수집에 저장합니
   const stored = await (await session.web('/api/order-intake')).json();
   assert.deepEqual(stored.orders.map(order => [order.provider, order.orderId, order.quantity]), [['coupang', '000100', 2]]);
   assert.ok(!JSON.stringify(session.modelRequests).includes('가상 배송지'));
+});
+
+test('봇은 로젠 등록 파일의 요약만 읽고 로그인해서 받는 링크를 보냅니다', async t => {
+  const productOrderId = '202611270400000001', address = '서울 가상구 비공개로 17';
+  const session = await boot(t, { naver: { async listNewOrders() {
+    return { from: '2026-11-20T00:00:00Z', to: '2026-11-27T00:00:00Z', orders: [{
+      productOrderId, orderId: '202611270400000002', productName: original[1][0], originalName: original[1][0],
+      optionName: original[1][1], quantity: 2, status: 'PAYED', placeOrderStatus: 'NOT_YET',
+      sourcePayload: { content: { productOrder: { shippingAddress: {
+        name: original[1][2], tel1: original[1][3], baseAddress: address, detailedAddress: '가상 101호', zipCode: '01234',
+      } } } },
+    }] };
+  } } });
+  await session.web('/api/order-intake/collect', json('POST', {}));
+  const packing = await (await session.web('/api/order-intake/packing')).json();
+  const dispatched = await (await session.web('/api/order-intake/dispatch', json('POST', {
+    expectedVersion: packing.version, boxIds: [], orderItemIds: [packing.orders[0].id],
+  }))).json();
+  const { date } = dispatched;
+  const result = await session.run(date + ' 출고 등록분을 로젠에 올릴 파일로 줘.', [
+    tool('get_logen_export', { date }),
+    result => {
+      assert.deepEqual(result, { ok: true, date, boxCount: 1, display: `로젠 등록 파일 · ${date} · 1상자`,
+        webTarget: { page: 'logen-export', date } });
+      return '출고 등록한 1상자를 확인했습니다.';
+    },
+  ]);
+  assert.deepEqual(session.calls.filter(call => call.route === '/api/shipping/logen-export'), [
+    { route: '/api/shipping/logen-export', method: 'GET', format: 'summary', status: 200 },
+  ]);
+  assert.match(result.content, /출고 등록한 1상자를 확인했습니다/);
+  assert.ok(result.content.includes(`[로젠 등록 파일 받기](https://system0.example/api/shipping/logen-export?date=${date})`));
+  assert.equal(result.files, undefined);
+  assert.doesNotMatch(JSON.stringify(session.modelRequests), /가상 101호|01234/);
 });
 
 test('수집 주문 합포장과 낱개 분리는 봇과 웹에서 같은 상자와 잔여 수량을 사용합니다', async t => {

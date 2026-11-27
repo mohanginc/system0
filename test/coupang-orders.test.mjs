@@ -5,14 +5,14 @@ import * as XLSX from 'xlsx';
 import { openDatabase } from '../lib/database.mjs';
 import { getOrderIntake, collectOrderIntake, importCoupangOrders } from '../lib/order-intake.mjs';
 import { getOrderPacking, reviseOrderPacking, registerOrderDispatch } from '../lib/order-packing.mjs';
-import { recoverCoupangDispatchPhones } from '../lib/coupang-dispatch-contacts.mjs';
+import { recoverCoupangDispatchMemos, recoverCoupangDispatchPhones } from '../lib/coupang-dispatch-contacts.mjs';
 
 const headings = ['번호', '묶음배송번호', '주문번호', '운송장번호', '출고일(발송일)', '주문일', '등록상품명', '등록옵션명',
   '노출상품ID', '옵션ID', '바코드', '결제액', '배송비', '도서산간 추가배송비', '구매수(수량)', '옵션판매가(판매단가)',
-  '수취인이름', '우편번호', '수취인 주소', '주문상태', '구매자전화번호', '수취인전화번호', '통관용수취인전화번호'];
+  '수취인이름', '우편번호', '수취인 주소', '주문상태', '구매자전화번호', '수취인전화번호', '통관용수취인전화번호', '배송메세지'];
 const pending = ['1', '000000000000123', '000000000000456', '', '', '2026-11-27 10:00:00', '모의 상품', '모의 옵션',
   '0000123', '0000456', '', '24,000', '2500', '0', '3', '8000', '모의 수취인', '01234', '가상시 가상로 10 101호', '',
-  '010-0000-0001', '0500-0000-0002', '010-0000-0003'];
+  '010-0000-0001', '0500-0000-0002', '010-0000-0003', ''];
 const replace = (row, field, value) => row.map((cell, index) => headings[index] === field ? value : cell);
 
 function workbook(rows, originalname = 'DeliveryList(2026-11-27)_(0).xlsx') {
@@ -199,4 +199,37 @@ test('지정한 원본 상자 수와 모두 미복원 또는 모두 일치 조�
   assert.deepEqual(phones(), [pending[21], pending[21]]);
   assert.deepEqual(recoverCoupangDispatchPhones(db, file, date, { expectedBoxes: 2 }), { matchedBoxes: 2, restoredBoxes: 0 });
   assert.deepEqual(recoverCoupangDispatchPhones(db, file, date, { expectedBoxes: 2, verifyOnly: true }), { matchedBoxes: 2, restoredBoxes: 0 });
+});
+
+test('배송메모는 원본대로 캡처하고 과거 상자에 같은 원본으로 한 번만 복원한다', async t => {
+  const db = openDatabase(':memory:');
+  t.after(() => db.close());
+  const notes = ['메모 1\n가상 배송 요청', ' 가상 배송 요청 2 '];
+  const first = replace(pending, '배송메세지', notes[0]);
+  const second = replace(replace(pending, '주문번호', '000000000000457'), '배송메세지', notes[1]);
+  const file = workbook([first, second]);
+  const imported = await importCoupangOrders(db, { file });
+  assert.doesNotMatch(JSON.stringify(imported), /가상 배송 요청/);
+  const snapshots = db.prepare('SELECT source_json FROM order_intake_snapshots ORDER BY id');
+  assert.deepEqual(snapshots.all().map(row => JSON.parse(row.source_json).shippingMemo), notes);
+  assert.equal((await importCoupangOrders(db, { file })).collection.unchanged, 2);
+  assert.equal(snapshots.all().length, 2);
+  const { version } = getOrderPacking(db);
+  const { date } = registerOrderDispatch(db, { expectedVersion: version, boxIds: [], orderItemIds: imported.orders.map(order => order.id) });
+  db.exec("UPDATE order_intake_snapshots SET source_json = json_remove(source_json, '$.shippingMemo')");
+  const evidenceBefore = snapshots.all();
+  const before = db.prepare('SELECT * FROM order_dispatch_boxes ORDER BY id').all().map(row => ({ ...row }));
+  assert.throws(() => recoverCoupangDispatchMemos(db, workbook([replace(first, '번호', '2'), second]), date, 2), /상자 수/);
+  assert.throws(() => recoverCoupangDispatchMemos(db, file, date, 2, { verifyOnly: true }), /복원 상태/);
+  assert.deepEqual(recoverCoupangDispatchMemos(db, file, date, 2), { matchedBoxes: 2, restoredBoxes: 2 });
+  const after = db.prepare('SELECT * FROM order_dispatch_boxes ORDER BY id').all().map(row => ({ ...row }));
+  assert.deepEqual(after.map(row => row.shipping_memo).sort(), [...notes].sort());
+  assert.deepEqual(after.map(row => ({ ...row, shipping_memo: null })), before);
+  assert.deepEqual(snapshots.all(), evidenceBefore);
+  assert.deepEqual(recoverCoupangDispatchMemos(db, file, date, 2), { matchedBoxes: 2, restoredBoxes: 0 });
+  assert.deepEqual(recoverCoupangDispatchMemos(db, file, date, 2, { verifyOnly: true }), { matchedBoxes: 2, restoredBoxes: 0 });
+
+  const memoOnlyAmendment = await importCoupangOrders(db, { file: workbook([replace(first, '배송메세지', '모의 새 배송 요청')]) });
+  assert.equal(memoOnlyAmendment.collection.updated, 1);
+  assert.equal(snapshots.all().length, 3);
 });

@@ -38,7 +38,10 @@
       <div id="board-notices" class="board-notices" hidden><ul id="notice-list"></ul></div>
       <div class="list-heading"><p id="list-description">상품명을 누르면 상자별 수취인·전화번호·동네·판매채널이 펼쳐집니다.</p><span id="updated-at">조회 중</span></div>
       <section id="registered-section" aria-labelledby="registered-title" hidden>
-        <div class="list-heading registered-heading"><h2 id="registered-title">등록한 출고</h2><span id="registered-count"></span></div>
+        <div class="list-heading registered-heading">
+          <h2 id="registered-title">등록한 출고</h2>
+          <div class="registered-actions"><span id="registered-count"></span><button id="logen-export-button" type="button" hidden disabled>로젠 업로드 엑셀 다운로드</button></div>
+        </div>
         <div id="registered-groups" class="shipment-grid"></div>
       </section>
       <div id="shipment-groups" class="shipment-grid" aria-busy="true"></div>

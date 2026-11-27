@@ -12,6 +12,7 @@ import { importFiles, exportDownload } from './lib/excel.mjs';
 import { normalizeBatch, reviseRows } from './lib/naming.mjs';
 import { listLlmPurposes, llmUsage } from './lib/llm.mjs';
 import { shippingBoard, shippingDates } from './lib/shipping.mjs';
+import { logenExport } from './lib/logen-export.mjs';
 import { createNaverClient } from './lib/naver.mjs';
 import { previewShippingBoard } from './lib/shipping-preview.mjs';
 import { productCatalog, addProduct, linkProductName, productCostHistory, addProductCost } from './lib/products.mjs';
@@ -313,6 +314,16 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
   app.use('/api/shipping', (_request, response, next) => { response.set('Cache-Control', 'no-store'); next(); });
   app.get('/api/shipping/board', (request, response) => response.json(shippingBoard(db, request.query.date, request.query.batchId)));
   app.get('/api/shipping/dates', (request, response) => response.json(shippingDates(db, request.query.month)));
+  app.get('/api/shipping/logen-export', (request, response) => {
+    try {
+      const output = logenExport(db, request.query.date, request.query.format);
+      if (request.query.format === 'summary') return response.json(output);
+      response.attachment(output.filename).type(output.contentType).send(output.buffer);
+    } catch (error) {
+      if (error.status === 404 || error.status === 409) return response.status(error.status).json({ error: error.message });
+      throw error;
+    }
+  });
   app.post('/api/shipping/preview', async (_request, response) => {
     if (previewRunning) return response.status(409).json({ error: '신규 주문 조회·상품명 정리 중입니다. 완료 후 갱신해 주세요.' });
     previewRunning = true;
