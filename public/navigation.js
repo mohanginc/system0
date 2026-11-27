@@ -1,12 +1,15 @@
 (() => {
   const pages = [
-    ['/', '상품명 정리'],
+    ['/', '주문 수집'],
+    ['/product-names', '상품명 정리'],
     ['/invoices.html', '송장 처리'],
     ['/shipping-board.html', '출고 보드'],
     ['/products.html', '상품·바코드'],
     ['/llm-usage.html', 'AI 호출 내역'],
   ];
-  const current = window.location.pathname === '/index.html' ? '/' : window.location.pathname;
+  const { pathname, search } = window.location;
+  const productReview = pathname === '/index.html' || (pathname === '/' && new URLSearchParams(search).has('batch'));
+  const current = productReview ? '/product-names' : pathname === '/order-intake.html' ? '/' : pathname;
   for (const nav of document.querySelectorAll('.app-nav')) {
     nav.replaceChildren(...pages.map(([href, title]) => {
       const link = document.createElement('a');

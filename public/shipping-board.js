@@ -6,8 +6,8 @@ let selectedDate = workDate(), calendarMonth = selectedDate.slice(0, 7), selecte
 let calendarData = { days: [] }, boardData = null, busy = false;
 const calendarRequests = new Map();
 let calendarRequestVersion = 0;
-let mode = 'confirmed', previewData = null;
-const messages = { confirmed: { text: '', error: false }, new: { text: '', error: false } };
+let mode = 'confirmed', previewData = null, collectedData = null;
+const messages = { confirmed: { text: '', error: false }, new: { text: '', error: false }, collected: { text: '', error: false } };
 const formatTime = value => new Date(value).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul',
   year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
 const invoiceState = state => ['unavailable', 'pending', 'complete'].includes(state) ? state : 'unavailable';
@@ -77,7 +77,8 @@ function renderJobs(data) {
   }
   $('job-list').replaceChildren(fragment);
 }
-function renderGroup(group, open, preview = false) {
+function renderGroup(group, open, view = 'confirmed') {
+  const collected = view === 'collected', quantityView = view !== 'confirmed';
   const complete = invoiceState(group.invoiceState) === 'complete' && !group.unprepared && !group.needsAttention;
   const details = element('details', undefined, 'shipment-card'); details.dataset.key = group.key;
   details.dataset.invoiceState = invoiceState(group.invoiceState); details.open = open;
@@ -87,26 +88,31 @@ function renderGroup(group, open, preview = false) {
   name.append(element('h2', group.name || '상품명 미정리'));
   const barcode = group.skuBarcode ? `바코드 ${group.skuBarcode}` : '바코드 없음';
   name.append(element('small', barcode + (group.shipmentType === 'exchange' ? ' · 맞교환' : ''), 'sku-barcode'));
-  const status = group.needsAttention ? (preview ? '상품명 확인이 필요합니다. 상세 목록의 사유를 확인하세요.' : '출고 정보 확인이 필요합니다.') : group.unprepared ? '상품명 정리가 필요합니다.'
+  let status = group.needsAttention ? (quantityView ? '상품명 확인이 필요합니다. 상세 목록의 사유를 확인하세요.' : '출고 정보 확인이 필요합니다.') : group.unprepared ? '상품명 정리가 필요합니다.'
     : complete ? '몰 송장 등록 확인 완료' : invoiceState(group.invoiceState) === 'pending' ? '송장 등록 확인 필요' : '';
+  if (collected) status = group.unprepared ? '상품명 미정리' : group.needsAttention && group.skuBarcode ? '상품명 확인 필요' : '';
   if (status) name.append(element('span', status, 'item-status'));
   const quantity = element('div', undefined, 'bundle-number');
-  quantity.append(element('strong', count(group.count)), element('span', preview ? '개' : '묶음'));
+  quantity.append(element('strong', count(group.count)), element('span', quantityView ? '개' : '묶음'));
   const arrow = element('span', undefined, 'expand-arrow'); arrow.setAttribute('aria-hidden', 'true');
   summary.append(name, quantity, arrow); details.append(summary);
   const container = element('div', undefined, 'shipment-details'), table = element('table', undefined, 'shipment-table');
-  table.setAttribute('aria-label', `${group.name || '미정리 항목'} 상세 출고 목록`);
+  table.setAttribute('aria-label', `${group.name || '미정리 항목'} ${collected ? '준비 주문 목록' : '상세 출고 목록'}`);
   const header = table.createTHead().insertRow();
-  for (const label of preview ? ['수취인', '전화번호', '동네', '수량'] : ['수취인', '전화번호', '동네']) {
+  const headings = collected ? ['판매채널', '상품주문번호', '수량'] : ['수취인', '전화번호', '동네'];
+  if (view === 'new') headings.push('수량');
+  for (const label of headings) {
     const th = element('th', label); th.scope = 'col'; header.append(th);
   }
   const body = table.createTBody();
   for (const shipment of group.shipments) {
     const row = body.insertRow();
-    for (const value of [shipment.recipient || '미등록', shipment.phone || '미등록', shipment.neighborhood || '지역 정보 없음']) row.insertCell().textContent = value;
-    if (preview) {
+    const data = collected ? [{ naver: '네이버', coupang: '쿠팡' }[shipment.provider] || shipment.provider || '—', shipment.productOrderId]
+      : [shipment.recipient || '미등록', shipment.phone || '미등록', shipment.neighborhood || '지역 정보 없음'];
+    for (const value of data) row.insertCell().textContent = value;
+    if (quantityView) {
       row.insertCell().textContent = count(shipment.quantity);
-      if (shipment.note) row.cells[0].append(element('small', shipment.note, 'review-reason'));
+      if (shipment.note) row.cells[collected ? 1 : 0].append(element('small', shipment.note, 'review-reason'));
     }
   }
   container.append(table); details.append(container); return details;
@@ -153,23 +159,54 @@ function renderPreview(data) {
   $('updated-at').textContent = data ? `마지막 성공: ${formatTime(data.updatedAt)}` : '아직 조회하지 않음';
   $('board-notices').hidden = true;
   const groups = document.createDocumentFragment();
-  for (const group of data?.groups || []) groups.append(renderGroup(group, open.has(group.key), true));
+  for (const group of data?.groups || []) groups.append(renderGroup(group, open.has(group.key), 'new'));
   $('shipment-groups').replaceChildren(groups);
   $('board-empty').hidden = Boolean(data?.groups.length);
   $('empty-title').textContent = data ? '조회 기간에 발주 미확인 주문이 없습니다.' : '포장을 준비할 신규 주문을 확인하세요.';
   $('empty-description').textContent = data ? '새 주문은 갱신 버튼을 눌러 확인할 수 있습니다.' : '갱신하면 상품명 정리까지 진행합니다. 주문 상태는 바뀌지 않습니다.';
   $('board-footnote').textContent = '부분 취소를 반영한 상품주문별 잔여 수량입니다. 합포장 상자 수가 아니며, 발주확인은 주문 수집 담당자가 별도로 처리합니다. 조회 결과는 저장하지 않아 화면을 다시 열면 재조회가 필요합니다.';
 }
+function renderCollected(data) {
+  const open = new Set([...$('shipment-groups').querySelectorAll('details[open]')].map(node => node.dataset.key));
+  const summary = data?.summary;
+  $('board-date').textContent = '수집한 발주 미확인 주문';
+  $('board-title').textContent = '출고 준비 수량';
+  $('quantity-label').textContent = '준비 수량'; $('attention-label').textContent = '확인 필요 수량';
+  for (const [id, key] of [['bundle-count', 'quantity'], ['group-count', 'groupCount'], ['unprepared-count', 'attentionQuantity']]) {
+    $(id).textContent = summary ? count(summary[key]) : '—';
+  }
+  $('invoice-status').textContent = '수량 단위 · 개';
+  $('invoice-description').textContent = '';
+  const notices = [];
+  if (summary?.heldCount) notices.push(element('li', `보류 ${count(summary.heldCount)}건은 수집 주문에서 확인하세요.`));
+  if (summary?.unverifiedCount) notices.push(element('li', `주문 상태 미확인 ${count(summary.unverifiedCount)}건은 준비 수량에서 제외했습니다.`));
+  $('notice-list').replaceChildren(...notices);
+  $('board-notices').hidden = !notices.length;
+  $('shipment-groups').replaceChildren(...(data?.groups || []).map(group => renderGroup(group, open.has(group.key), 'collected')));
+  $('board-empty').hidden = !data || Boolean(data.groups?.length);
+  $('empty-title').textContent = data?.updatedAt ? '준비할 발주 미확인 주문이 없습니다.' : '수집한 주문이 없습니다.';
+  $('empty-description').textContent = '주문 수집에서 최신 주문을 가져올 수 있습니다.';
+  $('updated-at').textContent = data ? (data.updatedAt ? `${formatTime(data.updatedAt)} 수집` : '아직 수집하지 않음') : '조회 중';
+  $('board-footnote').textContent = '발주 미확인 상품의 잔여 수량입니다. 확인한 주문의 출고 묶음은 별도 탭에서 확인할 수 있습니다.';
+}
 function selectMode(next) {
   if (busy || mode === next) return;
   mode = next;
-  document.body.classList.toggle('is-new', mode === 'new');
+  document.body.classList.toggle('is-new', mode !== 'confirmed');
   $('confirmed-mode').setAttribute('aria-pressed', String(mode === 'confirmed'));
   $('new-mode').setAttribute('aria-pressed', String(mode === 'new'));
+  $('collected-mode').setAttribute('aria-pressed', String(mode === 'collected'));
+  $('collected-review-link').hidden = mode !== 'collected';
   $('preview-range').hidden = mode !== 'new';
+  $('list-description').textContent = mode === 'collected' ? '상품명을 펼치면 상품주문번호와 수량을 볼 수 있습니다.'
+    : '상품명을 누르면 수취인·전화번호·동네가 펼쳐집니다.';
   const previous = messages[mode];
   message(previous.text, previous.error);
   if (mode === 'new') renderPreview(previewData);
+  else if (mode === 'collected') {
+    renderCollected(collectedData);
+    void loadCollected();
+  }
   else if (boardData) renderBoard(boardData);
   else {
     $('shipment-groups').replaceChildren(); $('board-notices').hidden = true;
@@ -183,6 +220,17 @@ function selectMode(next) {
     loadBoard({ reloadCalendar: true });
   }
   setBusy(busy);
+}
+async function loadCollected() {
+  if (busy) return;
+  setBusy(true); message('');
+  try {
+    const data = await api('/api/order-intake');
+    renderCollected(data); collectedData = data;
+  } catch (error) {
+    if (!collectedData) $('updated-at').textContent = '조회하지 못함';
+    message(`${error.message}${collectedData ? ' 마지막 조회 결과를 표시하고 있습니다.' : ''}`, true);
+  } finally { setBusy(false); }
 }
 async function refreshPreview() {
   if (busy) return;
@@ -250,7 +298,12 @@ $('today-button').addEventListener('click', () => {
 });
 $('confirmed-mode').addEventListener('click', () => selectMode('confirmed'));
 $('new-mode').addEventListener('click', () => selectMode('new'));
-$('refresh-button').addEventListener('click', () => mode === 'new' ? refreshPreview() : loadBoard({ reloadCalendar: true }));
+$('collected-mode').addEventListener('click', () => selectMode('collected'));
+$('refresh-button').addEventListener('click', () => {
+  if (mode === 'collected') return loadCollected();
+  if (mode === 'new') return refreshPreview();
+  return loadBoard({ reloadCalendar: true });
+});
 $('fullscreen-button').addEventListener('click', async () => {
   try {
     if (document.fullscreenElement) await document.exitFullscreen();
@@ -258,4 +311,5 @@ $('fullscreen-button').addEventListener('click', async () => {
   } catch { message('전체 화면을 열지 못했습니다. 브라우저의 F11 키도 사용할 수 있습니다.', true); }
 });
 document.addEventListener('fullscreenchange', () => { $('fullscreen-button').textContent = document.fullscreenElement ? '전체 화면 종료' : '전체 화면'; });
-renderCalendar(); loadBoard({ reloadCalendar: true });
+if (new URLSearchParams(window.location.search).get('mode') === 'collected') selectMode('collected');
+else { renderCalendar(); loadBoard({ reloadCalendar: true }); }

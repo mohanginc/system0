@@ -25,11 +25,26 @@
 .unmatched-table th:last-child { width: 90px; }
 .unmatched-table select { width: 100%; min-width: 0; }
 .unmatched-table .link-button { border-color: var(--pink); }
-.catalog-table { min-width: 580px; }
+.catalog-table { min-width: 690px; }
 .catalog-table th:first-child { width: 190px; }
+.catalog-table th:nth-child(3) { width: 90px; }
+.catalog-table th:nth-child(4) { width: 120px; }
 .catalog-table th:last-child { width: 100px; }
 .catalog-table td:first-child { font-family: var(--mono); font-variant-numeric: tabular-nums; }
-.catalog-table th:last-child, .catalog-table td:last-child { text-align: right; }
+.catalog-table :is(th,td):nth-child(3), .catalog-table :is(th,td):nth-child(4), .catalog-table :is(th,td):last-child { text-align: right; }
+.catalog-table td:nth-child(4) { font-variant-numeric: tabular-nums; }
+.cost-dialog { width: min(560px, calc(100% - 24px)); padding: 20px; border: 1px solid var(--border); border-radius: 12px; color: var(--navy); }
+.cost-dialog::backdrop { background: rgba(12, 21, 52, .42); }
+.cost-dialog h3 { margin: 16px 0 8px; font-size: 13px; }
+#cost-product { margin: 8px 0 16px; overflow-wrap: anywhere; }
+#cost-form { display: flex; flex-wrap: wrap; align-items: end; gap: 8px; }
+#cost-form label { flex: 1; min-width: 130px; font-size: 12px; }
+#cost-form input { display: block; width: 100%; margin-top: 4px; }
+#cost-message { margin: 8px 0; }
+.cost-dialog .table-wrap { max-height: 220px; }
+.cost-table { min-width: 0; }
+.cost-table :is(th,td):last-child { text-align: right; }
+.cost-actions { display: flex; justify-content: end; margin-top: 16px; }
 .product-empty { margin: 20px; font-size: 13px; color: #666; }
 .products-page .table-footer { padding: 12px 20px; }
 @media (max-width: 700px) {

@@ -36,7 +36,7 @@ function workbookRows(bytes) {
   return XLSX.utils.sheet_to_json(book.Sheets['주문'], { header: 1 });
 }
 
-async function boot(t) {
+async function boot(t, options = {}) {
   const calls = [], modelRequests = [];
   const bytes = workbookBytes(original);
   const cdn = new Map([[attachmentUrl, bytes]]);
@@ -71,7 +71,7 @@ async function boot(t) {
     const call_id = 'call_work_' + modelRequests.length;
     return { output: [{ type: 'function_call', id: 'fc_' + modelRequests.length, call_id, name, arguments: JSON.stringify(args) }] };
   } } };
-  const app = createApp({ databasePath: ':memory:', apiKey: '', client, model: 'local-mock', discordConfig: config });
+  const app = createApp({ databasePath: ':memory:', apiKey: '', client, model: 'local-mock', discordConfig: config, ...options });
   const server = await new Promise(resolve => {
     const listening = app.listen(0, '127.0.0.1', () => resolve(listening));
   });
@@ -109,6 +109,46 @@ async function boot(t) {
   };
   return { run, web, importFromWeb, calls, modelRequests, attachment, addAttachment };
 }
+
+test('봇이 네이버 수집·검수·준비 수량 조회를 조합하고 웹이 같은 상태를 읽습니다', async t => {
+  const productOrderId = '202611270100000001', barcode = '1234567890128';
+  let reads = 0, rowId;
+  const session = await boot(t, { naver: { async listNewOrders() {
+    reads++;
+    return { from: '2026-11-20T00:00:00Z', to: '2026-11-27T00:00:00Z', orders: [{
+      productOrderId, orderId: '202611270099999999', paidAt: '2026-11-27T09:00:00+09:00',
+      productName: original[1][0], originalName: original[1][0], optionName: original[1][1], quantity: 2,
+    }] };
+  } } });
+  await session.web('/api/products', json('POST', { barcode, name: editedName }), 201);
+  await session.web('/api/products/' + barcode + '/costs', json('POST', { effectiveDate: '2026-11-26', unitCostKrw: 6500 }), 201);
+  const result = await session.run(`발주 전 주문을 가져와서 ${productOrderId}번은 ${editedName}으로 검수하고 ${barcode}에 연결해줘. 같은 바코드 준비 수량도 봐줘.`, [
+    tool('collect_naver_orders', { lookbackDays: null }),
+    result => {
+      assert.equal(result.collection.added, 1);
+      assert.equal(result.rows[0].cleanedName, cleanedName);
+      rowId = result.rows[0].id;
+      return tool('save_collected_order_review', { rowId, cleanedName: editedName, skuBarcode: barcode });
+    },
+    result => {
+      assert.equal(result.rows[0].skuBarcode, barcode);
+      return tool('read_collected_orders', { offset: 0, query: barcode });
+    },
+    async result => {
+      const fromWeb = await (await session.web('/api/order-intake')).json();
+      assert.equal(fromWeb.orders[0].id, rowId);
+      assert.equal(fromWeb.orders[0].cleanedName, editedName);
+      assert.equal(fromWeb.orders[0].cost.totalCost, 13000);
+      assert.deepEqual(result.summary, fromWeb.summary);
+      assert.equal(result.preparationQuantity, fromWeb.groups[0].count);
+      return '지정 상품을 검수했고 2개를 준비하면 됩니다.';
+    },
+  ]);
+  assert.equal(reads, 1);
+  assert.match(result.content, /새 상품주문 1건/);
+  assert.match(result.content, /수집 주문 검수 저장/);
+  assert.ok(session.calls.some(call => call.route === '/api/order-intake/orders/' + rowId && call.method === 'PATCH'));
+});
 
 test('디스코드 주문 첨부, 정리, 검수, 엑셀이 웹과 같은 작업과 원본 값을 사용합니다', async t => {
   const session = await boot(t);

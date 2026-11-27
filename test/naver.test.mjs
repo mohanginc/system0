@@ -99,6 +99,36 @@ test('문자형 전화 대체와 0 잔여 수량 제외를 처리하며 빈 조�
   assert.equal(empty.orderCount(), 7);
 });
 
+test('수집 조회는 선택한 기간과 채널·옵션 코드·주문 단위 금액을 원본과 함께 반환한다', async () => {
+  const row = item(undefined, { merchantChannelId: 'naver-channel', productId: '0031', itemNo: '0061', optionManageCode: '옵션-A',
+    initialQuantity: 5, remainQuantity: 2, unitPrice: 14_000, optionPrice: 2000, initialPaymentAmount: 75_000,
+    remainPaymentAmount: 30_000, deliveryFeeAmount: 0, expectedSettlementAmount: 28_000 });
+  row.content.order.orderDate = '2026-10-15T11:00:00+09:00';
+  row.content.order.paymentDate = '2026-10-15T11:01:00+09:00';
+  row.content.order.generalPaymentAmount = 120_000;
+  row.lastChangedDate = '2026-10-15T11:02:00+09:00';
+  const mock = fixture((url, options, count) => response(200, page(count === 1 ? [row] : [])));
+  const { orders: [result], from } = await mock.client.listNewOrders({ includeIntake: true, lookbackDays: 3 });
+  assert.equal(from, new Date(end - 3 * dayMs).toISOString());
+  assert.equal(mock.orderCount(), 3);
+  assert.equal(result.store, 'naver-channel');
+  assert.equal(result.externalProductId, '0031');
+  assert.equal(result.externalOptionId, '0061');
+  assert.equal(result.sellerOptionCode, '옵션-A');
+  assert.equal(result.changedAt, row.lastChangedDate);
+  assert.equal(result.financial.orderedQuantity, 5);
+  assert.equal(result.financial.unitPrice, 14_000);
+  assert.equal(result.financial.optionPrice, 2000);
+  assert.equal(result.financial.paymentAmount, 30_000);
+  assert.equal(result.financial.expectedSettlementAmount, 28_000);
+  assert.equal(result.financial.settlementAmount, null);
+  assert.equal(result.financial.shippingFeeAmount, 0);
+  assert.equal(result.financial.shippingExtraAmount, null);
+  assert.deepEqual(result.sourcePayload, row);
+  await assert.rejects(mock.client.listNewOrders({ lookbackDays: 181 }), /180일/);
+  assert.equal(mock.orderCount(), 3);
+});
+
 test('중복 상품주문의 나중 응답이 0 수량·취소·확인 상태라면 앞서 수집한 항목도 제외한다', async () => {
   const counts = [];
   for (const changes of [{ remainQuantity: 0 }, { productOrderStatus: 'CANCELED' }, { placeOrderStatus: 'OK' }]) {

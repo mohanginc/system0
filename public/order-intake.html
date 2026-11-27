@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>주문 수집 · system0</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/brand-star.svg">
+  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/order-intake.css">
+  <script src="/navigation.js" defer></script>
+  <script src="/order-intake.js" defer></script>
+</head>
+<body class="order-intake">
+  <header class="header">
+    <a class="brand" href="/" aria-label="system0 홈"><img class="brand-mark" src="/assets/brand-star.svg" alt="" width="34" height="56"> system0</a>
+    <nav class="app-nav" aria-label="업무 메뉴"></nav>
+  </header>
+  <main>
+    <div class="intake-heading">
+      <h1>주문 수집</h1>
+      <div class="intake-actions">
+        <a class="intake-link" href="/shipping-board.html?mode=collected">준비 수량 보기</a>
+        <div class="intake-range"><label for="collection-range">결제 기간</label>
+          <select id="collection-range">
+            <option value="7">최근 7일</option>
+            <option value="30">최근 30일</option>
+            <option value="90">최근 90일</option>
+            <option value="180">최근 180일</option>
+          </select>
+        </div>
+        <button id="collect-button" class="primary" type="button">네이버 주문 가져오기</button>
+      </div>
+    </div>
+    <div id="intake-message" class="message" role="status" hidden></div>
+    <section class="review-card" aria-labelledby="intake-title" aria-busy="true" id="intake-results">
+      <div class="review-heading intake-results-heading">
+        <div>
+          <h2 id="intake-title">수집한 주문 <span id="row-count">—</span></h2>
+          <p id="intake-summary"></p>
+        </div>
+        <button id="retry-button" type="button" hidden>상품명 정리 재시도</button>
+      </div>
+      <div id="intake-table-wrap" class="table-wrap" hidden>
+        <table class="intake-table">
+          <thead><tr><th scope="col">판매채널 · 상품주문번호</th><th scope="col">제품명 원본 · 옵션</th><th scope="col">정리된 제품명 · 바코드</th><th scope="col">잔여 수량</th><th scope="col">상태</th></tr></thead>
+          <tbody id="intake-rows"></tbody>
+        </table>
+      </div>
+      <p id="intake-empty" class="intake-empty">수집한 주문을 불러오는 중입니다.</p>
+    </section>
+    <dialog id="order-review" class="intake-review" aria-labelledby="review-title">
+      <form id="review-form">
+        <h2 id="review-title">수집 주문 검수</h2>
+        <p id="review-original" class="review-original"></p>
+        <div class="intake-field"><label for="review-name">정리된 제품명</label><input id="review-name" type="text" autocomplete="off" maxlength="500" required></div>
+        <div class="intake-field"><label for="review-barcode">바코드</label><select id="review-barcode"></select></div>
+        <p id="review-error" role="alert" hidden></p>
+        <div class="intake-actions">
+          <button id="close-review" type="button">닫기</button>
+          <button id="save-review" class="primary" type="submit">저장</button>
+        </div>
+      </form>
+    </dialog>
+  </main>
+</body>
+</html>

@@ -27,7 +27,7 @@
     </section>
     <section class="review-card product-section" aria-labelledby="products-title">
       <div class="review-heading"><h2 id="products-title">등록 상품 <span id="product-count" class="product-count">—</span></h2></div>
-      <div class="table-wrap catalog-wrap"><table class="product-table catalog-table"><thead><tr><th scope="col">바코드</th><th scope="col">제품명</th><th scope="col">연결명 수</th></tr></thead><tbody id="product-rows"></tbody></table><p id="products-empty" class="product-empty" hidden>등록한 상품이 없습니다.</p></div>
+      <div class="table-wrap catalog-wrap"><table class="product-table catalog-table"><thead><tr><th scope="col">바코드</th><th scope="col">제품명</th><th scope="col">연결명 수</th><th scope="col">단위 원가</th><th scope="col">원가 관리</th></tr></thead><tbody id="product-rows"></tbody></table><p id="products-empty" class="product-empty" hidden>등록한 상품이 없습니다.</p></div>
     </section>
     <section class="review-card product-section" aria-labelledby="unmatched-title">
       <div class="review-heading"><h2 id="unmatched-title">바코드 없는 제품명 <span id="unmatched-count" class="product-count">—</span></h2><button id="refresh-button" type="button">새로고침</button></div>
@@ -38,6 +38,22 @@
       </div>
       <div class="table-footer"><span id="visible-count"></span><button id="show-more" type="button" hidden>50개 더 보기</button></div>
     </section>
+    <dialog id="cost-dialog" class="cost-dialog" aria-labelledby="cost-title">
+      <h2 id="cost-title">원가 관리</h2>
+      <p id="cost-product"></p>
+      <form id="cost-form">
+        <label for="cost-date">적용 시작일<input id="cost-date" type="date" required></label>
+        <label for="cost-value">단위 원가(원)<input id="cost-value" type="text" inputmode="numeric" pattern="[0-9]+" maxlength="16" required autocomplete="off"></label>
+        <button class="primary" type="submit">원가 등록</button>
+      </form>
+      <p id="cost-message" class="message" role="status" hidden></p>
+      <h3>원가 이력</h3>
+      <div class="table-wrap">
+        <table class="cost-table"><thead><tr><th scope="col">적용 시작일</th><th scope="col">단위 원가</th></tr></thead><tbody id="cost-rows"></tbody></table>
+        <p id="cost-empty" class="product-empty" hidden>등록한 원가가 없습니다.</p>
+      </div>
+      <div class="cost-actions"><button id="close-cost" type="button">닫기</button></div>
+    </dialog>
   </main>
   <footer><span>system0 · 상품·바코드</span></footer>
 </body>

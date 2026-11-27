@@ -1,0 +1,32 @@
+.intake-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 0 0 18px; color: var(--navy); }
+.intake-heading h1 { margin: 0; font-size: 25px; letter-spacing: -.6px; }
+.intake-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.intake-range { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.intake-link { display: inline-flex; align-items: center; min-height: 40px; padding: 10px 14px; border: 1px solid #92928f; border-radius: 50px; font-size: 13px; }
+.intake-link:hover { background: var(--soft); }
+.order-intake button.primary { background: var(--navy); border-color: var(--navy); }
+.order-intake button.primary:hover:not(:disabled) { background: #243155; }
+.intake-results-heading { flex-direction: row; align-items: center; flex-wrap: wrap; padding: 16px 20px; }
+.intake-results-heading h2 { margin: 0; }
+.intake-results-heading h2 span { font-size: 12px; margin-left: 7px; color: #5f626b; }
+#intake-summary { margin: 5px 0 0; font-size: 12px; color: #5f626b; line-height: 1.6; }
+#intake-summary:empty { display: none; }
+.intake-table { min-width: 720px; }
+.intake-table th:first-child { width: 20%; }
+.intake-table th:nth-child(2) { width: 28%; }
+.intake-table th:nth-child(3) { width: 29%; }
+.intake-table th:nth-child(4) { width: 10%; }
+.intake-table th:nth-child(5) { width: 13%; }
+.intake-table td, .intake-table td:first-child { overflow-wrap: anywhere; text-align: left; padding: 12px 16px; }
+.intake-table small { display: block; color: #5f626b; font-size: 11px; }
+.intake-table .status { white-space: normal; }
+.intake-table .intake-edit { margin-top: 5px; min-height: 40px; }
+.intake-empty { padding: 22px 20px; margin: 0; border-top: 1px solid var(--border); color: #5f626b; font-size: 13px; }
+.intake-review { width: min(500px, calc(100% - 32px)); padding: 22px; border: 1px solid var(--border); border-radius: 12px; }
+.intake-review::backdrop { background: rgb(12 21 52 / 45%); }
+.intake-field { display: grid; gap: 6px; margin: 13px 0; font-size: 12px; font-weight: 600; }
+.intake-review select { max-width: 100%; }
+.intake-review .intake-actions { justify-content: flex-end; margin-top: 16px; }
+.intake-review p { font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
+.review-original { color: #5f626b; }
+#review-error { color: #8c293e; }

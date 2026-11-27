@@ -14,7 +14,8 @@ import { listLlmPurposes, llmUsage } from './lib/llm.mjs';
 import { shippingBoard, shippingDates } from './lib/shipping.mjs';
 import { createNaverClient } from './lib/naver.mjs';
 import { previewShippingBoard } from './lib/shipping-preview.mjs';
-import { productCatalog, addProduct, linkProductName } from './lib/products.mjs';
+import { productCatalog, addProduct, linkProductName, productCostHistory, addProductCost } from './lib/products.mjs';
+import { getOrderIntake, collectOrderIntake, normalizeOrderIntake, reviseOrderIntake } from './lib/order-intake.mjs';
 import { CARRIERS, unlockNaverFiles, classifyInvoiceFiles, prepareInvoiceFile, importInvoiceFiles, listInvoiceRuns, listInvoiceDrafts, reviseInvoiceItems,
   exportInvoices, downloadInvoices, latestInvoice, refreshInvoiceStatus, refreshOutsideInvoiceStatus,
   invoiceView, invoiceSourceView, invoiceDateRunIds, checkInvoiceDate, applyInvoiceTrackingReview, confirmInvoiceTracking, lookupInvoiceOrder } from './lib/invoices.mjs';
@@ -57,6 +58,7 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
   const ai = client === undefined ? (apiKey ? new OpenAI({ apiKey, timeout: 120000, maxRetries: 0 }) : null) : client;
   const running = new Set();
   let previewRunning = false;
+  let intakeRunning = false;
   const invoiceChecking = new Set();
   const app = express();
   app.disable('x-powered-by');
@@ -139,6 +141,8 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
   app.get('/api/products', (_request, response) => response.json(productCatalog(db)));
   app.post('/api/products', (request, response) => response.status(201).json(addProduct(db, request.body || {})));
   app.post('/api/products/aliases', (request, response) => response.json(linkProductName(db, request.body || {})));
+  app.get('/api/products/:barcode/costs', (request, response) => response.json(productCostHistory(db, request.params.barcode)));
+  app.post('/api/products/:barcode/costs', (request, response) => response.status(201).json(addProductCost(db, request.params.barcode, request.body || {})));
   app.use('/api/invoices', (_request, response, next) => { response.set('Cache-Control', 'no-store'); next(); });
   app.get('/api/invoices/meta', (_request, response) => response.json({ carriers: CARRIERS }));
   app.get('/api/invoices/drafts', (request, response) => response.json({ drafts: listInvoiceDrafts(db, request.query.date) }));
@@ -315,6 +319,26 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
     catch (error) { response.status(400).json({ error: error.message }); }
     finally { previewRunning = false; }
   });
+  app.use('/api/order-intake', (_request, response, next) => { response.set('Cache-Control', 'no-store'); next(); });
+  app.get('/api/order-intake', (_request, response) => response.json({ ...getOrderIntake(db), running: intakeRunning }));
+  const intakeOptions = { naver, client: ai, model };
+  const runIntake = operation => async (request, response) => {
+    if (intakeRunning) return response.status(409).json({ error: '주문 수집·상품명 정리가 진행 중입니다.' });
+    intakeRunning = true;
+    try { response.json(await operation(request)); }
+    finally { intakeRunning = false; }
+  };
+  app.post('/api/order-intake/collect', runIntake(request => collectOrderIntake(db,
+    { ...intakeOptions, lookbackDays: request.body?.lookbackDays })));
+  app.post('/api/order-intake/normalize', runIntake(() => normalizeOrderIntake(db, intakeOptions)));
+  app.patch('/api/order-intake/orders/:id', (request, response) => {
+    if (intakeRunning) return response.status(409).json({ error: '주문 수집·상품명 정리가 진행 중입니다.' });
+    try { response.json(reviseOrderIntake(db, idFrom(request), request.body || {})); }
+    catch (error) {
+      if (error.status === 409 || error.status === 404) response.status(error.status).json({ error: error.message });
+      else throw error;
+    }
+  });
   app.get('/api/llm/purposes', (_request, response) => response.json(listLlmPurposes(db)));
   app.get('/api/llm/usage', (request, response) => response.json(llmUsage(db, request.query.from, request.query.to, request.query.purpose)));
   app.get('/api/batches', (request, response) => response.json({ batches: listBatches(db, request.query.date).map(batch => ({ ...batch, running: running.has(batch.id) })) }));
@@ -369,7 +393,11 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
     }
   });
   app.use('/api', (_request, response) => response.status(404).json({ error: '지원하지 않는 API입니다.' }));
-  app.use(express.static(path.join(projectRoot, 'public'), { dotfiles: 'deny' }));
+  const publicRoot = path.join(projectRoot, 'public');
+  app.get('/', (request, response) => response.sendFile(
+    Object.hasOwn(request.query, 'batch') ? 'index.html' : 'order-intake.html', { root: publicRoot }));
+  app.get('/product-names', (_request, response) => response.sendFile('index.html', { root: publicRoot }));
+  app.use(express.static(publicRoot, { dotfiles: 'deny' }));
   app.use((error, _request, response, _next) => {
     const uploadErrors = {
       LIMIT_FILE_SIZE: '파일 하나는 10MB까지 올릴 수 있습니다.',
