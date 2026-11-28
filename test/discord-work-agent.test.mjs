@@ -243,7 +243,7 @@ test('봇은 네이버 취소를 확인한 뒤 출고 가능 상자와 웹의 �
       assert.ok(value.summary.lastCheckedAt);
       const { lastCheckedAt, ...counts } = value.summary;
       assert.deepEqual(counts, { naverBoxCount: 2, matchedCount: 2, queriedCount: 2, readyCount: 1, holdCount: 0, canceledCount: 1, unverifiedCount: 0 });
-      return tool('get_shipping_board', { date, batchId: null, search: '새싹 수유쿠션' });
+      return tool('get_shipping_board', { date, batchId: null, registeredAt: null, search: '새싹 수유쿠션' });
     },
     async value => {
       const { registered } = await (await session.web(boardRoute)).json();
@@ -320,7 +320,7 @@ test('수집 주문 합포장과 낱개 분리는 봇과 웹에서 같은 상자
       assert.equal(result.registeredCount, 1);
       assert.equal(result.registeredQuantity, 1);
       dispatchedDate = result.date;
-      return tool('get_shipping_board', { date: dispatchedDate, batchId: null, search: null });
+      return tool('get_shipping_board', { date: dispatchedDate, batchId: null, registeredAt: null, search: null });
     },
     result => {
       assert.equal(result.registered.boxCount, 1);
@@ -395,7 +395,7 @@ test('출고 조회 결과와 웹에서 할 상품·바코드 관리 작업을 �
   ] }));
   const webBoard = await (await session.web(route)).json();
   const output = await session.run(date + ' 출고보드에서 새싹 수유쿠션 수량을 알려주고 상품·바코드 관리에서 신규 상품 등록도 해줘.', [
-    tool('get_shipping_board', { date, batchId: batch.id, search: '새싹' }),
+    tool('get_shipping_board', { date, batchId: batch.id, registeredAt: null, search: '새싹' }),
     result => {
       assert.equal(result.ok, true);
       assert.deepEqual(result.summary, webBoard.summary);
@@ -431,7 +431,7 @@ test('같은 디스코드 요청에서 첨부 송장을 매칭하고 출고 보�
       assert.equal(result.ok, true);
       assert.equal(result.items[0].trackingNumber, order.trackingNumber);
       runId = result.runId;
-      return tool('get_shipping_board', { date, batchId: batch.id, search: '새싹' });
+      return tool('get_shipping_board', { date, batchId: batch.id, registeredAt: null, search: '새싹' });
     },
     result => {
       assert.equal(result.ok, true);

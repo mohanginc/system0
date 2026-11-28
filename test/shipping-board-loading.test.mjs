@@ -8,16 +8,18 @@ const setupEnd = source.indexOf("$('previous-month').addEventListener(");
 assert.ok(setupEnd > 0);
 const settle = () => new Promise(resolve => setImmediate(resolve));
 function deferred() { let resolve, reject; const promise = new Promise((yes, no) => { resolve = yes; reject = no; }); return { promise, resolve, reject }; }
-function harness(apiStub) {
+function harness(apiStub, document) {
   const rendered = [], calendars = [], notifications = [];
-  const context = vm.createContext({ console, URLSearchParams, apiStub, rendered, calendars, notifications });
+  const context = vm.createContext({ console, URLSearchParams, apiStub, rendered, calendars, notifications, document });
   vm.runInContext(source.slice(0, setupEnd), context);
   vm.runInContext(`
     selectedDate = '2026-11-14'; calendarMonth = '2026-11';
-    boardData = { date: '2026-11-13', selectedBatchId: null };
+    boardData = { date: '2026-11-13', selectedBatchId: null, selectedRegisteredAt: null };
     api = apiStub;
     setBusy = value => { busy = value; };
-    renderBoard = data => { boardData = data; selectedBatchId = data.selectedBatchId; rendered.push(data); };
+    renderBoard = data => {
+      boardData = data; selectedBatchId = data.selectedBatchId; selectedRegisteredAt = data.selectedRegisteredAt ?? null; rendered.push(data);
+    };
     renderCalendar = () => calendars.push({ month: calendarMonth, data: calendarData });
     message = (text, error = false) => { messages[mode] = { text, error }; notifications.push({ mode, text, error }); };
   `, context);
@@ -25,7 +27,8 @@ function harness(apiStub) {
     state: () => JSON.parse(JSON.stringify(vm.runInContext('({ busy, selectedDate, selectedBatchId, calendarMonth, calendarData, boardData, messages })', context))) };
 }
 const boardFor = route => { const query = new URL(route, 'http://test').searchParams;
-  return { date: query.get('date'), selectedBatchId: query.has('batchId') ? Number(query.get('batchId')) : null }; };
+  return { date: query.get('date'), selectedBatchId: query.has('batchId') ? Number(query.get('batchId')) : null,
+    selectedRegisteredAt: query.get('registeredAt') }; };
 
 test('목록 응답을 표시하기 전에는 달력 API를 시작하지 않는다', async () => {
   const board = deferred(), calendar = deferred(), requests = [];
@@ -52,12 +55,51 @@ test('달력 응답을 기다리지 않고 목록을 표시하며 작업 선택�
     await settle();
     assert.equal(h.rendered.length, 1, '본문 목록을 달력보다 먼저 표시해야 한다.');
     assert.equal(h.state().busy, false);
-    h.run('selectBatch(7)'); await settle();
+    h.run('selectJob({ batchId: 7 })'); await settle();
     assert.equal(h.rendered.at(-1).selectedBatchId, 7, '달력 조회 중에도 작업 선택이 가능해야 한다.');
     const refresh = h.run('loadBoard({ reloadCalendar: true })'); await settle();
     assert.equal(requests.filter(route => route.includes('/dates?')).length, 1, '같은 월의 진행 중 요청을 공유해야 한다.');
     calendar.resolve({ days: [] }); await refresh; await settle();
   } finally { calendar.resolve({ days: [] }); await first; }
+});
+
+test('작업 목록에서 기존 파일·등록 출고·전체를 각각 선택하고 선택 표시를 바꾼다', async () => {
+  function node() {
+    return { children: [], dataset: {}, attrs: {}, events: {},
+      append(...children) { this.children.push(...children); }, replaceChildren(child) { this.children = child.children; },
+      setAttribute(key, value) { this.attrs[key] = value; }, addEventListener(key, listener) { this.events[key] = listener; } };
+  }
+  const list = node(), jobCount = node(), document = {
+    createElement: node, createDocumentFragment: node, getElementById: id => id === 'job-list' ? list : jobCount,
+  };
+  const morning = '2026-11-14T02:14:00.000Z', afternoon = '2026-11-14T06:58:00.000Z';
+  const dispatchJobs = [{ registeredAt: afternoon, boxCount: 7 }, { registeredAt: morning, boxCount: 19 }];
+  const batches = [{ id: 7, name: '상품명 정리 파일.xlsx', createdAt: '2026-11-14T04:00:00.000Z', rowCount: 3 }];
+  const requests = [];
+  const h = harness(async route => {
+    requests.push(route);
+    return { ...boardFor(route), dispatchJobs, batches };
+  }, document);
+  function pressed() { return list.children.filter(button => button.attrs['aria-pressed'] === 'true').map(button => button.children[0].textContent); }
+  await h.run('loadBoard()');
+  h.run('renderJobs(boardData)');
+  assert.equal(jobCount.textContent, '3개');
+  assert.deepEqual(list.children.map(button => button.children[0].textContent),
+    ['모든 작업 모아 보기', '오후 3:58 출고 작업', '상품명 정리 파일.xlsx', '오전 11:14 출고 작업']);
+  assert.deepEqual(pressed(), ['모든 작업 모아 보기']);
+  assert.match(list.children[0].children[1].textContent, /등록 상자 26개/);
+
+  for (const [index, query, title] of [
+    [1, { registeredAt: afternoon }, '오후 3:58 출고 작업'],
+    [2, { batchId: '7' }, '상품명 정리 파일.xlsx'],
+    [3, { registeredAt: morning }, '오전 11:14 출고 작업'],
+    [0, {}, '모든 작업 모아 보기'],
+  ]) {
+    list.children[index].events.click(); await settle();
+    h.run('renderJobs(boardData)');
+    assert.deepEqual(Object.fromEntries(new URL(requests.at(-1), 'http://test').searchParams), { date: '2026-11-14', ...query });
+    assert.deepEqual(pressed(), [title]);
+  }
 });
 
 test('달력이 늦어도 월 이동을 막지 않고 이전 월 응답으로 현재 달력을 덮어쓰지 않는다', async () => {

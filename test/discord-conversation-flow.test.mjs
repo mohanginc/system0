@@ -229,7 +229,7 @@ test('업무 채널의 다른 직원이 답장으로 송장 업무를 넘겨받�
     (_result, transcript) => {
       assertToday(transcript, [[firstText, firstOutput.output.content], [secondText, secondOutput.output.content]]);
       assert.ok(!transcript.includes(otherChannelText));
-      return ['get_shipping_board', { date, batchId: null, search: '양손프리' }];
+      return ['get_shipping_board', { date, batchId: null, registeredAt: null, search: '양손프리' }];
     },
     result => { assert.equal(result.ok, true); return `양손프리 ${result.matchingQuantity}묶음입니다.`; },
   ], plain);
@@ -298,7 +298,7 @@ test('일반 채팅에서 조회 대상을 신규 주문으로 정정하고 그�
   const s = await boot(t, { naver: naverNewOrders() });
   const firstText = '오늘 양손프리 출고 수량 알려줘';
   const firstReply = '오늘 출고 보드 기준 양손프리 출고 수량은 0묶음입니다.';
-  await s.invoke(firstText, [['get_shipping_board', { date, batchId: null, search: '양손프리' }], firstReply], plain);
+  await s.invoke(firstText, [['get_shipping_board', { date, batchId: null, registeredAt: null, search: '양손프리' }], firstReply], plain);
 
   const correction = '시스템에 등록된것 말고 현재 주문들어와있는것 중에 준비해야할것들말야';
   const corrected = await s.invoke(correction, [
@@ -336,7 +336,7 @@ test('일반 채팅에서 조회 대상을 신규 주문으로 정정하고 그�
     (_result, transcript) => {
       assertToday(transcript, [[firstText, firstReply], [correction, corrected.output.content],
         [followupText, continued.output.content], [scopeAnswer, scoped.output.content]]);
-      return ['get_shipping_board', { date, batchId: null, search: '다른 상품' }];
+      return ['get_shipping_board', { date, batchId: null, registeredAt: null, search: '다른 상품' }];
     },
     newReply,
   ], plain);

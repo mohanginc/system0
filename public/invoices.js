@@ -86,13 +86,15 @@ function clearMatch() {
 function sourceLocation(source) {
   if (!source) return '';
   const batch = selectedBatches.get(source.batchId) || current?.batches?.find(batch => batch.id === source.batchId), date = source.batchCreatedAt || batch?.createdAt;
+  if (source.dispatchBoxId) return `출고 등록 ${formatTime(date)}`;
   return [date ? `작업 ${formatTime(date)}` : '', source.sourceFile ? `파일: ${source.sourceFile}` : '',
     [source.sourceSheet ? `시트: ${source.sourceSheet}` : '', source.sourceRow !== undefined ? `${source.sourceRow}행` : ''].filter(Boolean).join(' · ')].filter(Boolean).join('\n');
 }
 function orderGroups(orders) {
   const groups = new Map();
   for (const order of orders) {
-    const key = order.sourceType === 'naver_only' ? 'naver_only' : order.batchId;
+    const key = order.sourceType === 'naver_only' ? 'naver_only'
+      : order.sourceType === 'registered_dispatch' ? `dispatch-${order.source.batchCreatedAt}` : order.batchId;
     if (!groups.has(key)) groups.set(key, { batchId: order.batchId, sourceType: order.sourceType, orders: [] });
     groups.get(key).orders.push(order);
   }
@@ -106,9 +108,12 @@ function groupHeading(group, columns) {
   const otherDate = date && date !== selectedSourceDate;
   row.classList.toggle('other-date', Boolean(otherDate));
   const files = [...new Set(group.orders.map(order => order.source?.sourceFile).filter(Boolean))];
-  heading.append(element('strong', group.sourceType === 'naver_only' ? '① 네이버 주문파일' : `작업 ${formatTime(sourceTime)}`));
+  const title = group.sourceType === 'naver_only' ? '① 네이버 주문파일'
+    : group.sourceType === 'registered_dispatch' ? `출고 등록 ${formatTime(sourceTime)}` : `작업 ${formatTime(sourceTime)}`;
+  heading.append(element('strong', title));
   if (date) heading.append(element('span', otherDate ? date < selectedSourceDate ? '이전 날짜 주문' : '다른 날짜 주문' : '선택한 날짜', 'order-date-badge'));
-  heading.append(element('span', `파일: ${files.join(' · ') || batch?.name || '원본 정보 없음'}`), element('small', `${count(group.orders.length)}행`));
+  if (group.sourceType !== 'registered_dispatch') heading.append(element('span', `파일: ${files.join(' · ') || batch?.name || '원본 정보 없음'}`));
+  heading.append(element('small', `${count(group.orders.length)}행`));
   cell.append(heading); row.append(cell); return row;
 }
 function renderPreview() {
@@ -626,7 +631,7 @@ function showRun(data) {
   data.rematchRequired ??= !data.run.matchingVersion;
   current = data; itemChanges.clear(); issueChanges.clear(); trackingChanges.clear(); $('upload-section').hidden = false; $('preview-section').hidden = true; $('run-section').hidden = false;
   renderPreview();
-  const dates = [...new Set((data.batches || []).map(batch => workDate(batch.createdAt)))].sort();
+  const dates = [...new Set([...(data.batches || []).map(batch => workDate(batch.createdAt)), ...data.items.map(item => item.sourceDate).filter(Boolean)])].sort();
   $('source-message').textContent = `처리 날짜 ${data.run.sourceDate || selectedSourceDate} · ${dates.length ? `원본 날짜 ${dates.join(' · ')}` : '연결된 저장 원본 없음'} · ① 네이버 파일 기준으로 매칭합니다.`;
   const unavailable = scopeUnavailable();
   $('saved-files').hidden = unavailable; $('import-form').hidden = !unavailable && !data.rematchRequired;

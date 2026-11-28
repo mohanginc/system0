@@ -2,7 +2,7 @@
 const $ = id => document.getElementById(id);
 const workDate = (value = Date.now()) => new Date(new Date(value).getTime() + 9 * 60 * 60 * 1000).toISOString().slice(0, 10);
 const count = value => Number(value || 0).toLocaleString('ko-KR');
-let selectedDate = workDate(), calendarMonth = selectedDate.slice(0, 7), selectedBatchId = null;
+let selectedDate = workDate(), calendarMonth = selectedDate.slice(0, 7), selectedBatchId = null, selectedRegisteredAt = null;
 let calendarData = { days: [] }, boardData = null, busy = false;
 const calendarRequests = new Map();
 let calendarRequestVersion = 0;
@@ -12,6 +12,10 @@ const formatTime = value => new Date(value).toLocaleString('ko-KR', { timeZone: 
   year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false });
 const invoiceState = state => ['unavailable', 'pending', 'complete'].includes(state) ? state : 'unavailable';
 const registeredTotal = entry => entry?.totalBoxCount ?? entry?.boxCount ?? 0;
+const allJobsSelected = () => selectedBatchId === null && selectedRegisteredAt === null;
+const jobTime = (value, hour12 = false, detail = {}) => new Date(value).toLocaleTimeString('ko-KR', {
+  timeZone: 'Asia/Seoul', hour: hour12 ? 'numeric' : '2-digit', minute: '2-digit', hour12, ...detail,
+});
 
 function dispatchStatusLabels(entry) {
   const labels = [];
@@ -71,24 +75,34 @@ function renderCalendar() {
   $('calendar-days').replaceChildren(fragment);
 }
 function renderJobs(data) {
-  $('job-count').textContent = `${count(data.batches.length)}개`;
-  const registeredCount = registeredTotal(data.registered);
+  const dispatchJobs = data.dispatchJobs || [];
+  const jobs = [
+    ...data.batches.map(batch => ({ time: batch.createdAt, title: batch.name,
+      details: `${jobTime(batch.createdAt)} · 주문 ${count(batch.rowCount)}행`, batchId: batch.id })),
+    ...dispatchJobs.map(job => {
+      const sameMinute = dispatchJobs.some(other => other !== job && other.registeredAt.slice(0, 16) === job.registeredAt.slice(0, 16));
+      const time = jobTime(job.registeredAt, true, sameMinute ? { second: '2-digit', fractionalSecondDigits: 3 } : {});
+      return { time: job.registeredAt, registeredAt: job.registeredAt, title: `${time} 출고 작업`, details: `상자 ${count(job.boxCount)}개` };
+    }),
+  ].sort((left, right) => right.time.localeCompare(left.time));
+  $('job-count').textContent = `${count(jobs.length)}개`;
   const fragment = document.createDocumentFragment();
-  if (!data.batches.length) fragment.append(element('p', registeredCount
-    ? `등록 상자 ${count(registeredCount)}개` : '이 날짜에 저장된 작업이 없습니다.', 'job-empty'));
+  if (!jobs.length) fragment.append(element('p', '이 날짜에 저장된 작업이 없습니다.', 'job-empty'));
   else {
     const all = element('button', undefined, 'job-button'); all.type = 'button'; all.dataset.batchId = '';
-    all.setAttribute('aria-pressed', String(selectedBatchId === null));
-    const description = [`작업 ${count(data.batches.length)}개`];
+    all.setAttribute('aria-pressed', String(allJobsSelected()));
+    const description = [`작업 ${count(jobs.length)}개`];
+    const registeredCount = dispatchJobs.reduce((sum, job) => sum + job.boxCount, 0);
     if (registeredCount) description.push(`등록 상자 ${count(registeredCount)}개`);
     all.append(element('strong', '모든 작업 모아 보기'), element('small', description.join(' · ')));
-    all.addEventListener('click', () => selectBatch(null)); fragment.append(all);
-    for (const batch of data.batches) {
-      const button = element('button', undefined, 'job-button'); button.type = 'button'; button.dataset.batchId = String(batch.id);
-      button.setAttribute('aria-pressed', String(selectedBatchId === batch.id));
-      const time = new Date(batch.createdAt).toLocaleTimeString('ko-KR', { timeZone: 'Asia/Seoul', hour: '2-digit', minute: '2-digit', hour12: false });
-      button.append(element('strong', batch.name), element('small', `${time} · 주문 ${count(batch.rowCount)}행`));
-      button.addEventListener('click', () => selectBatch(batch.id)); fragment.append(button);
+    all.addEventListener('click', () => selectJob()); fragment.append(all);
+    for (const job of jobs) {
+      const button = element('button', undefined, 'job-button'); button.type = 'button';
+      if (job.batchId) button.dataset.batchId = String(job.batchId);
+      else button.dataset.registeredAt = job.registeredAt;
+      button.setAttribute('aria-pressed', String(job.batchId === selectedBatchId || job.registeredAt === selectedRegisteredAt));
+      button.append(element('strong', job.title), element('small', job.details));
+      button.addEventListener('click', () => selectJob(job)); fragment.append(button);
     }
   }
   $('job-list').replaceChildren(fragment);
@@ -148,16 +162,17 @@ function renderGroup(group, open, view = 'confirmed') {
   container.append(table); details.append(container); return details;
 }
 function renderBoard(data) {
-  const sameScope = boardData?.date === data.date && boardData?.selectedBatchId === data.selectedBatchId;
+  const sameScope = boardData?.date === data.date && boardData?.selectedBatchId === data.selectedBatchId
+    && boardData?.selectedRegisteredAt === data.selectedRegisteredAt;
   const open = sameScope ? new Set([...$('shipment-groups').querySelectorAll('details[open]')].map(node => node.dataset.key)) : new Set();
   const openRegistered = sameScope ? new Set([...$('registered-groups').querySelectorAll('details[open]')].map(node => node.dataset.key)) : new Set();
   const registered = data.registered, totalRegistered = registeredTotal(registered);
   const registeredGroups = registered?.groups || [];
-  boardData = data; selectedBatchId = data.selectedBatchId;
+  boardData = data; selectedBatchId = data.selectedBatchId; selectedRegisteredAt = data.selectedRegisteredAt ?? null;
   $('quantity-label').textContent = '출고 묶음'; $('attention-label').textContent = '미정리 묶음';
   $('board-footnote').textContent = data.groups.length ? '기존 엑셀의 출고 묶음은 원본 주문 행 단위입니다.' : '';
   const [year, month, day] = data.date.split('-');
-  $('board-date').textContent = `${year}.${month}.${day} · ${selectedBatchId === null ? '모든 작업' : '선택한 작업'}`;
+  $('board-date').textContent = `${year}.${month}.${day} · ${allJobsSelected() ? '모든 작업' : '선택한 작업'}`;
   $('board-title').textContent = `${Number(month)}월 ${Number(day)}일 출고 목록`;
   $('bundle-count').textContent = count(data.summary.bundleCount);
   $('group-count').textContent = count(data.summary.groupCount);
@@ -173,8 +188,8 @@ function renderBoard(data) {
   for (const group of data.groups) groups.append(renderGroup(group, open.has(group.key)));
   $('shipment-groups').replaceChildren(groups);
   $('registered-section').hidden = !totalRegistered;
-  $('logen-export-button').hidden = selectedBatchId !== null || !registered?.boxCount;
-  $('check-cancellations-button').hidden = selectedBatchId !== null || !registered?.naverBoxCount;
+  $('logen-export-button').hidden = !allJobsSelected() || !registered?.boxCount;
+  $('check-cancellations-button').hidden = !allJobsSelected() || !registered?.naverBoxCount;
   const dispatchLabels = dispatchStatusLabels(registered);
   $('registered-count').textContent = dispatchLabels.length
     ? [`전체 ${count(totalRegistered)}상자`, `출고 대상 ${count(registered.boxCount)}상자`, ...dispatchLabels].join(' · ')
@@ -248,7 +263,7 @@ async function refreshPreview() {
   } finally { setBusy(false); }
 }
 async function downloadLogenWorkbook() {
-  if (busy || mode !== 'confirmed' || selectedBatchId !== null || boardData?.date !== selectedDate || !boardData?.registered?.boxCount) return;
+  if (busy || mode !== 'confirmed' || !allJobsSelected() || boardData?.date !== selectedDate || !boardData?.registered?.boxCount) return;
   const date = boardData.date, button = $('logen-export-button'), label = button.textContent;
   setBusy(true); message('');
   button.textContent = '엑셀 준비 중…';
@@ -271,7 +286,7 @@ async function downloadLogenWorkbook() {
   } finally { button.textContent = label; setBusy(false); }
 }
 async function checkNaverCancellations() {
-  if (busy || mode !== 'confirmed' || selectedBatchId !== null || boardData?.date !== selectedDate || !boardData?.registered?.naverBoxCount) return;
+  if (busy || mode !== 'confirmed' || !allJobsSelected() || boardData?.date !== selectedDate || !boardData?.registered?.naverBoxCount) return;
   const button = $('check-cancellations-button'), label = button.textContent;
   setBusy(true); message('');
   button.textContent = '취소 상태 확인 중…';
@@ -292,19 +307,24 @@ async function loadBoard({ reloadCalendar = false } = {}) {
   try {
     const query = new URLSearchParams({ date: selectedDate });
     if (selectedBatchId !== null) query.set('batchId', selectedBatchId);
+    if (selectedRegisteredAt !== null) query.set('registeredAt', selectedRegisteredAt);
     const request = api(`/api/shipping/board?${query}`);
     const data = await request;
     renderBoard(data); renderCalendar();
     if (reloadCalendar) void loadCalendar(calendarMonth);
   } catch (error) {
     if (boardData) {
-      selectedDate = boardData.date; selectedBatchId = boardData.selectedBatchId; renderCalendar();
+      selectedDate = boardData.date; selectedBatchId = boardData.selectedBatchId;
+      selectedRegisteredAt = boardData.selectedRegisteredAt ?? null; renderCalendar();
     } else $('updated-at').textContent = '조회하지 못함';
     message(`${error.name === 'TimeoutError' ? '서버 응답이 늦어지고 있습니다.' : error.message}${boardData ? ' 마지막 조회 결과를 표시하고 있습니다.' : ' 서버 연결을 확인하고 새로고침해 주세요.'}`, true);
   } finally { setBusy(false); }
 }
-function selectDay(date) { selectedDate = date; selectedBatchId = null; renderCalendar(); loadBoard(); }
-function selectBatch(id) { if (busy) return; selectedBatchId = id; loadBoard(); }
+function selectDay(date) { selectedDate = date; selectedBatchId = null; selectedRegisteredAt = null; renderCalendar(); loadBoard(); }
+function selectJob({ batchId = null, registeredAt = null } = {}) {
+  if (busy) return;
+  selectedBatchId = batchId; selectedRegisteredAt = registeredAt; loadBoard();
+}
 async function loadCalendar(month) {
   const version = ++calendarRequestVersion;
   const request = calendarRequests.get(month) || api(`/api/shipping/dates?month=${month}`);
@@ -338,7 +358,8 @@ $('previous-month').addEventListener('click', () => changeMonth(-1));
 $('next-month').addEventListener('click', () => changeMonth(1));
 $('today-button').addEventListener('click', () => {
   if (busy) return;
-  selectedDate = workDate(); calendarMonth = selectedDate.slice(0, 7); selectedBatchId = null; loadBoard({ reloadCalendar: true });
+  selectedDate = workDate(); calendarMonth = selectedDate.slice(0, 7); selectedBatchId = null; selectedRegisteredAt = null;
+  loadBoard({ reloadCalendar: true });
 });
 $('confirmed-mode').addEventListener('click', () => selectMode('confirmed'));
 $('new-mode').addEventListener('click', () => selectMode('new'));

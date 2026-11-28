@@ -314,7 +314,8 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
   });
   app.use('/api/shipping', (_request, response, next) => { response.set('Cache-Control', 'no-store'); next(); });
   const cancellationChecks = new Set();
-  app.get('/api/shipping/board', (request, response) => response.json(shippingBoard(db, request.query.date, request.query.batchId)));
+  app.get('/api/shipping/board', (request, response) => response.json(shippingBoard(db,
+    request.query.date, request.query.batchId, request.query.registeredAt)));
   app.get('/api/shipping/dates', (request, response) => response.json(shippingDates(db, request.query.month)));
   app.post('/api/shipping/cancellations/check', async (request, response) => {
     const { date } = request.body || {};

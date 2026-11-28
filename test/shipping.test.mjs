@@ -9,6 +9,9 @@ import * as XLSX from 'xlsx';
 import { openDatabase, deleteBatch, deleteRows } from '../lib/database.mjs';
 import { importFiles } from '../lib/excel.mjs';
 import { shippingBoard, shippingDates, neighborhood } from '../lib/shipping.mjs';
+import { collectOrderIntake } from '../lib/order-intake.mjs';
+import { getOrderPacking, registerOrderDispatch } from '../lib/order-packing.mjs';
+import { reportHandlers } from '../lib/discord-report-tools.mjs';
 
 // 서버 모듈의 환경 파일 로딩도 운영 설정을 읽지 않도록 격리합니다.
 process.env.SYSTEM0_ENV_FILE = path.join(os.tmpdir(), 'system0-shipping-absent-' + randomUUID() + '.env');
@@ -232,4 +235,71 @@ test('두 출고 API는 읽기 전용으로 동작하고 잘못된 날짜·월·
   assert.equal((await fetch(base + '/api/shipping/dates')).status, 200);
   assert.deepEqual(db.prepare('SELECT * FROM rows ORDER BY id').all(), before);
   assert.equal(db.prepare('SELECT count(*) AS n FROM llm_calls').get().n, 0);
+});
+
+test('같은 날짜의 파일 작업과 오전·오후 출고 등록을 개별 또는 전체 조회한다', async t => {
+  const app = createApp({ databasePath: ':memory:', apiKey: '', client: null });
+  const server = await new Promise(resolve => { const s = app.listen(0, '127.0.0.1', () => resolve(s)); });
+  const db = app.locals.db;
+  t.after(async () => { await new Promise(resolve => server.close(resolve)); db.close(); });
+  const morning = '2026-10-14T02:14:12.405Z', afternoon = '2026-10-14T06:58:24.328Z';
+  t.mock.timers.enable({ apis: ['Date'], now: new Date(morning) });
+  const legacy = batch(db, [rawRow('legacy')], ['파일에서 정리한 상품'], '2026-10-14T04:01:00.000Z');
+  const address = { name: '가상 수취인', tel1: '010-1111-9999', baseAddress: '서울 강남구 테헤란로 1',
+    detailedAddress: '101호', zipCode: '01234' };
+  const names = ['오전 상품 A', '오전 상품 B', '오후 상품 C'];
+  await collectOrderIntake(db, { naver: { listNewOrders: async () => ({ orders: names.map((productName, index) => ({
+    productOrderId: '202610141001' + index, orderId: '202610140001' + index, status: 'PAYED', placeOrderStatus: 'NOT_YET',
+    productName, optionName: '', quantity: 1, sourcePayload: { productOrder: { shippingAddress: address } },
+  })) }) } });
+  function register(remaining) {
+    const packing = getOrderPacking(db);
+    const orders = db.prepare('SELECT id FROM order_intake_items WHERE product_name IN (' + remaining.map(() => '?').join(',') + ')').all(...remaining);
+    registerOrderDispatch(db, { expectedVersion: packing.version, boxIds: [], orderItemIds: orders.map(order => order.id) });
+  }
+  register(names.slice(0, 2));
+  t.mock.timers.setTime(Date.parse(afternoon));
+  register(names.slice(2));
+
+  const base = 'http://127.0.0.1:' + server.address().port;
+  async function read(functionPath) {
+    const response = await fetch(base + functionPath);
+    assert.equal(response.status, 200);
+    return response.json();
+  }
+  const route = '/api/shipping/board?date=' + date;
+  const all = await read(route);
+  assert.deepEqual(all.dispatchJobs, [{ registeredAt: afternoon, boxCount: 1 }, { registeredAt: morning, boxCount: 2 }]);
+  assert.equal(all.summary.bundleCount, 4);
+  assert.deepEqual(all.groups.map(group => group.name), ['파일에서 정리한 상품']);
+  assert.equal(all.registered.totalBoxCount, 3);
+
+  const uploaded = await read(route + '&batchId=' + legacy.batch.id);
+  assert.deepEqual(uploaded.batches, all.batches);
+  assert.deepEqual(uploaded.dispatchJobs, all.dispatchJobs, '개별 조회 중도 다른 작업을 선택할 수 있습니다.');
+  assert.deepEqual(uploaded.groups, all.groups);
+  assert.equal(uploaded.registered.totalBoxCount, 0);
+
+  for (const [registeredAt, expected] of [[morning, names.slice(0, 2)], [afternoon, names.slice(2)]]) {
+    const scoped = await read(route + '&registeredAt=' + encodeURIComponent(registeredAt));
+    assert.equal(scoped.selectedRegisteredAt, registeredAt);
+    assert.equal(scoped.selectedBatchId, null);
+    assert.deepEqual(scoped.dispatchJobs, all.dispatchJobs);
+    assert.deepEqual(scoped.groups, []);
+    assert.equal(scoped.summary.bundleCount, expected.length);
+    assert.deepEqual(scoped.registered.groups.map(group => group.name).sort(), expected);
+    assert.ok(scoped.registered.boxes.every(box => box.registeredAt === registeredAt));
+  }
+
+  const reports = reportHandlers({ api: read });
+  const report = await reports.get_shipping_board({ date, batchId: null, registeredAt: afternoon, search: null });
+  assert.equal(report.selectedRegisteredAt, afternoon);
+  assert.deepEqual(report.dispatchJobs, all.dispatchJobs);
+  assert.deepEqual(report.registered.groups.map(group => group.name), ['오후 상품 C']);
+  assert.deepEqual(report.groups, []);
+
+  for (const query of ['&registeredAt=2026-10-15T02:14:12.405Z', '&registeredAt=bad',
+    '&batchId=' + legacy.batch.id + '&registeredAt=' + morning, '&registeredAt=' + morning + '&registeredAt=' + afternoon]) {
+    assert.equal((await fetch(base + route + query)).status, 400);
+  }
 });
