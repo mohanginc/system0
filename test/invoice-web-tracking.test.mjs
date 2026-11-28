@@ -52,6 +52,27 @@ function harness(initial = detail()) {
 const childrenWith = (node, tag) => [node, ...node.children.flatMap(child => childrenWith(child, tag))].filter(child => child.tagName === tag);
 const submit = h => h.nodes.get('invoice-action-form').onsubmit({ preventDefault() {} });
 
+test('저장한 원본의 재매칭은 첨부 없이 공용 API를 호출하고 새 작업을 연다', async () => {
+  const prior = detail({ run: { id: 8, rematchAvailable: true } });
+  const h = harness(prior), next = detail({ run: { id: 9, rematchAvailable: false } });
+  h.context.mockApi = async (url, options) => {
+    h.calls.push({ url, method: options.method, body: JSON.parse(options.body) });
+    return next;
+  };
+  h.run("refreshControls(); $('saved-naver-password').value = 'test-password'; saveItemDraft(current.items[0], {note: '미저장 검토'}); refreshControls();");
+  assert.equal(h.nodes.get('rematch-saved-form').hidden, false);
+  assert.equal(h.nodes.get('rematch-saved-button').disabled, true);
+  const submitRematch = () => h.nodes.get('rematch-saved-form').listeners.get('submit')({ preventDefault() {} });
+  await submitRematch();
+  assert.equal(h.calls.length, 0);
+  h.run('itemChanges.clear(); refreshControls();');
+  await submitRematch();
+  assert.deepEqual(h.calls, [{ url: '/api/invoices/8/rematch', method: 'POST', body: { naverPassword: 'test-password' } }]);
+  assert.equal(h.run('current.run.id'), 9);
+  assert.equal(h.nodes.get('saved-naver-password').value, '');
+  assert.equal(h.nodes.get('rematch-saved-form').hidden, true);
+});
+
 test('잠긴 상품주문의 후보를 실제 송장 확인으로 미리보고 두 상품의 송장을 정해진 범위에 저장한다', async () => {
   const candidates = [{ trackingNumber: '001234567001', internalId: 'parcel-a', valid: null },
     { trackingNumber: '001234567002', internalId: 'parcel-b', valid: true },

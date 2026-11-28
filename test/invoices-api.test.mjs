@@ -92,6 +92,40 @@ test('상품주문번호는 정확히 일치하는 최신 작업만 찾고 날�
   assert.deepEqual(await (await lookup(productIds[0])).json(), { matches: [expected, { ...expected, runId: earlier.run.id }] });
 });
 
+test('저장 원본 재매칭의 중복·최신 작업·이미 만든 엑셀을 구분하고 기존 이력을 보존한다', async t => {
+  const { app, request } = await boot(t), { batch } = await addSource(request);
+  const sourceDate = '2026-11-27';
+  const match = async extra => {
+    const body = invoiceForm(extra, [batch.id]);
+    body.append('sourceDate', sourceDate);
+    const response = await request('/api/invoices/import', { method: 'POST', body });
+    assert.equal(response.status, 201);
+    return response.json();
+  };
+  const rematch = id => request(`/api/invoices/${id}/rematch`, json('POST', {}));
+  const original = await match(false);
+  const unchanged = await rematch(original.run.id);
+  assert.equal(unchanged.status, 200);
+  assert.equal((await unchanged.json()).run.id, original.run.id);
+
+  const newer = await match(true);
+  const stale = await rematch(original.run.id);
+  assert.equal(stale.status, 409);
+  assert.equal((await stale.json()).code, 'invoice_rematch_superseded');
+  const drafts = await (await request('/api/invoices/drafts?date='+sourceDate+'&includeHistory=true')).json();
+  assert.deepEqual(drafts.drafts.map(run => [run.id, run.rematchAvailable]), [[newer.run.id, true], [original.run.id, false]]);
+
+  const exportFile = await request(`/api/invoices/${newer.run.id}/file`, json('POST', { mode: 'export', expectedVersion: newer.viewVersion }));
+  assert.equal(exportFile.status, 200);
+  const saved = Buffer.from(await exportFile.arrayBuffer());
+  const archived = await rematch(newer.run.id);
+  assert.equal(archived.status, 409);
+  assert.equal((await archived.json()).code, 'invoice_rematch_unavailable');
+  const downloaded = await request(`/api/invoices/${newer.run.id}/download`);
+  assert.ok(Buffer.from(await downloaded.arrayBuffer()).equals(saved));
+  assert.equal(app.locals.db.prepare('SELECT count(*) AS count FROM invoice_runs').get().count, 2);
+});
+
 test('공용 검토 저장은 이전 버전을 거절하고 미등록 파일을 생성해도 기존 보관본을 유지합니다', async t => {
   const { request } = await boot(t, { queryProductOrders: async ids => ids.map(id => remote(id, id === productIds[0]
     ? {} : { status: 'PAYED', trackingNumber: '', deliveryCompanyCode: '' })) });

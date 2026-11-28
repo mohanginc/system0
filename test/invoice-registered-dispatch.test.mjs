@@ -1,7 +1,10 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import * as XLSX from 'xlsx';
+import officeCrypto from 'officecrypto-tool';
 import { importFiles } from '../lib/excel.mjs';
+import { createDiscordHandler } from '../lib/discord-bot.mjs';
+import { dispatchReference } from '../lib/dispatch-reference.mjs';
 import { collectOrderIntake, importCoupangOrders } from '../lib/order-intake.mjs';
 import { getOrderPacking, registerOrderDispatch, reviseOrderPacking } from '../lib/order-packing.mjs';
 import { checkDispatchCancellations } from '../lib/dispatch-cancellations.mjs';
@@ -57,22 +60,24 @@ function appendFile(form, field, { originalname, buffer }) {
   form.append(field, new Blob([buffer]), originalname);
 }
 
-async function uploadFiles(request, date, naverFile, courierFile) {
+async function uploadFiles(request, date, naverFile, courierFile, naverPassword = '') {
   const body = new FormData();
   appendFile(body, 'naverFiles', naverFile);
   appendFile(body, 'courierFiles', courierFile);
   body.append('sourceDate', date);
   body.append('deliveryCompanyCode', 'KGB');
+  if (naverPassword) body.append('naverPassword', naverPassword);
   return JSON.parse(await responseBytes(await request('/api/invoices/import', { method: 'POST', body }), 201));
 }
 
-async function boot(t, naver) {
-  const app = createApp({ databasePath: ':memory:', naver, apiKey: '', client: null, discordConfig: null });
+async function boot(t, naver, { client = null, discordConfig = null } = {}) {
+  const app = createApp({ databasePath: ':memory:', naver, apiKey: '', client, discordConfig, model: 'local-mock' });
   const db = app.locals.db;
   const server = await new Promise(resolve => { const listener = app.listen(0, '127.0.0.1', () => resolve(listener)); });
   t.after(async () => { await new Promise(resolve => server.close(resolve)); db.close(); });
-  const request = (route, options) => fetch('http://127.0.0.1:' + server.address().port + route, options);
-  return { db, request };
+  const baseUrl = 'http://127.0.0.1:' + server.address().port;
+  const request = (route, options) => fetch(baseUrl + route, options);
+  return { db, request, baseUrl };
 }
 
 async function prepare(t, { sameParent = true, priorFailure = false, checkCancellation = false } = {}) {
@@ -247,4 +252,117 @@ test('한 상품주문의 등록 상자 두 개는 대표 송장을 선택하고
     trackingNumbers.map(number => [number, true]));
   const excel = workbookRows(await responseBytes(await action(selected, '/file', { mode: 'auto' }), 200));
   assert.deepEqual(excel.slice(1).map(row => [row[0], row[3]]), [[product.productOrderId, trackingNumbers[1]]]);
+});
+
+test('디스코드에서 27일 실패 작업을 다시 요청하면 보관 원본으로만 26건 엑셀을 만들고 기존 파일과 검토를 보존한다', async t => {
+  const date = '2026-11-27', password = 'synthetic-naver-excel-password';
+  const requestText = '27일 실패한 송장 작업 다시 매칭해서 네이버 등록용 엑셀 만들어줘';
+  const scope = { guildId: '111111111111111111', channelId: '222222222222222222', userId: '333333333333333333' };
+  const config = { secret: 'registered-dispatch-test-key', guildId: scope.guildId, channelIds: [scope.channelId],
+    userIds: [scope.userId], plainMessageChannelIds: [scope.channelId], publicOrigin: 'https://system0.example' };
+  const products = Array.from({ length: 26 }, (_, index) => {
+    const suffix = String(index + 1).padStart(2, '0');
+    return order(suffix, '가상 배송 상품 ' + suffix, '20261127123460' + suffix);
+  });
+  const labels = products.map((_, index) => [String(45670001001 + index), dispatchReference(date, index + 1)]);
+  const naver = { listNewOrders: async () => ({ orders: products }), queryProductOrders: async () => [] };
+  let failedId, rematchedId, modelCalls = 0;
+  const client = { responses: { create: async request => {
+    modelCalls++;
+    const user = JSON.parse(request.input[0].content);
+    assert.equal(user.text, requestText);
+    assert.equal(user.attachments, undefined);
+    assert.ok(!JSON.stringify(request.input).includes(password));
+    const outputs = request.input.filter(entry => entry.type === 'function_call_output').map(entry => JSON.parse(entry.output));
+    let name, args;
+    if (!outputs.length) {
+      name = 'list_invoice_runs'; args = { date };
+    } else if (outputs.length === 1) {
+      assert.equal(outputs[0].ok, true);
+      const source = outputs[0].runs.find(run => run.sourceDate === date && run.generatedAt === null);
+      assert.equal(source?.runId, failedId);
+      name = 'rematch_invoice_files'; args = { runId: source.runId };
+    } else if (outputs.length === 2) {
+      const result = outputs[1];
+      assert.equal(result.ok, true);
+      assert.equal(result.sourceRunId, failedId);
+      assert.equal(result.fileActions.create, true);
+      assert.notEqual(result.runId, failedId);
+      rematchedId = result.runId;
+      name = 'get_invoice_file'; args = { runId: rematchedId, mode: 'export' };
+    } else {
+      assert.equal(outputs.length, 3);
+      assert.equal(outputs[2].attached, true);
+      return { output: [], output_text: '저장된 두 원본으로 네이버 엑셀을 만들었습니다.' };
+    }
+    assert.ok(request.tools.some(tool => tool.name === name), '공용 업무 도구를 모델에 제공해야 합니다.');
+    return { output: [{ type: 'function_call', id: 'fc_' + modelCalls, call_id: 'call_' + modelCalls,
+      name, arguments: JSON.stringify(args) }] };
+  } } };
+  const { db, request, baseUrl } = await boot(t, naver, { client, discordConfig: config });
+  const json = (method, data) => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+  const archiveOrder = order(98, '보존할 기존 작업 상품', legacyOrderId);
+  const legacy = importFiles(db, [file('상품명 정리 주문.xlsx', [
+    ['원상품명', '주문번호', '체결번호', '송화주', '전화번호', '주소', '수량', '쇼핑몰'],
+    [archiveOrder.productName, legacyRef, archiveOrder.orderId, recipient, phone, address, 1, '네이버'],
+  ])]);
+  db.prepare('UPDATE batches SET created_at = ? WHERE id = ?').run('2026-11-26T01:00:00.000Z', legacy.batch.id);
+  const archived = await uploadFiles(request, '2026-11-26', naverWorkbook([archiveOrder]), courierWorkbook([[legacyTracking, legacyRef]]));
+  const archiveRoute = '/api/invoices/' + archived.run.id;
+  const archive = await responseBytes(await request(archiveRoute + '/file', json('POST', { mode: 'auto', expectedVersion: archived.viewVersion })), 200);
+  const beforeUpload = naverWorkbook(products);
+  const encrypted = { ...beforeUpload, buffer: officeCrypto.encrypt(beforeUpload.buffer, { password }) };
+  const failed = await uploadFiles(request, date, encrypted, courierWorkbook(labels), password);
+  failedId = failed.run.id;
+  const failureRoute = '/api/invoices/' + failedId;
+  assert.equal(failed.currentSummary.connected, 0);
+  assert.equal(failed.fileActions.create, false);
+  const reviewed = JSON.parse(await responseBytes(await request(failureRoute + '/items', json('PATCH', {
+    expectedVersion: failed.viewVersion, changes: [{ id: failed.items[0].id, decision: 'hold', note: '다시 확인할 첫 번째 상품' }],
+  })), 200));
+  assert.equal(reviewed.items[0].note, '다시 확인할 첫 번째 상품');
+  const snapshot = id => [db.prepare('SELECT * FROM invoice_runs WHERE id = ?').get(id),
+    db.prepare('SELECT * FROM invoice_items WHERE run_id = ? ORDER BY id').all(id),
+    db.prepare('SELECT * FROM invoice_files WHERE run_id = ? ORDER BY id').all(id),
+    db.prepare('SELECT * FROM invoice_revisions WHERE item_id IN (SELECT id FROM invoice_items WHERE run_id = ?) ORDER BY id').all(id)];
+  const savedFailure = snapshot(failedId), savedArchive = snapshot(archived.run.id);
+
+  await collectOrderIntake(db, { naver });
+  const packing = getOrderPacking(db);
+  const orderItemIds = products.map(product => packing.orders.find(item => item.productOrderId === product.productOrderId).id);
+  assert.equal(registerOrderDispatch(db, { expectedVersion: packing.version, boxIds: [], orderItemIds }).registeredCount, 26);
+  db.prepare('UPDATE order_intake_snapshots SET recorded_at = ?').run(date + 'T05:00:00.000Z');
+  db.prepare('UPDATE order_dispatch_boxes SET registered_at = ?').run(date + 'T06:00:00.000Z');
+  const beforeRetry = db.prepare('SELECT count(*) AS n FROM invoice_runs').get().n;
+  const missingPassword = await request(failureRoute + '/rematch', json('POST', {}));
+  const passwordError = JSON.parse(await responseBytes(missingPassword, 400));
+  assert.equal(passwordError.code, 'invoice_source_password_required');
+  assert.match(passwordError.error, /암호/);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM invoice_runs').get().n, beforeRetry);
+
+  const calls = [];
+  const handle = createDiscordHandler({ config: { ...config, baseUrl, naverPassword: password }, fetcher: (url, options) => {
+    assert.equal(new URL(url).origin, baseUrl);
+    calls.push([options?.method || 'GET', new URL(url).pathname]);
+    return fetch(url, options);
+  } });
+  const result = await handle({ ...scope, id: '555555555555555555', botMessageId: '666666666666666666', kind: 'message', text: requestText });
+  assert.equal(modelCalls, 4, result.content);
+  assert.equal(result.files?.length, 1, result.content);
+  assert.ok(calls.some(call => call[0] === 'POST' && call[1] === failureRoute + '/rematch'));
+  assert.ok(!calls.some(call => call[1] === '/api/invoices/import'));
+  const output = result.files[0].attachment;
+  const excel = workbookRows(Buffer.from(output));
+  assert.deepEqual(excel[0], ['상품주문번호', '배송방법', '택배사', '송장번호']);
+  assert.deepEqual(excel.slice(1).map(row => [row[0], row[3]]), products.map((item, index) => [item.productOrderId, labels[index][0]]));
+  const retried = await request(failureRoute + '/rematch', json('POST', { naverPassword: password }));
+  assert.ok(retried.ok, await retried.clone().text());
+  assert.equal((await retried.json()).run.id, rematchedId);
+  assert.equal(db.prepare('SELECT count(*) AS n FROM invoice_runs').get().n, beforeRetry + 1);
+  const history = JSON.parse(await responseBytes(await request('/api/invoices/drafts?date=' + date + '&includeHistory=true'), 200));
+  assert.ok(history.drafts.some(draft => draft.id === failedId));
+  assert.deepEqual(await responseBytes(await request('/api/invoices/' + rematchedId + '/download'), 200), output);
+  assert.deepEqual(await responseBytes(await request(archiveRoute + '/download'), 200), archive);
+  assert.deepEqual(snapshot(failedId), savedFailure);
+  assert.deepEqual(snapshot(archived.run.id), savedArchive);
 });

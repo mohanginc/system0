@@ -37,6 +37,9 @@ function refreshControls() {
   const needsReview = pendingTracking > 0 || unresolved > 0 || blocked || scopeUnavailable() || current?.rematchRequired;
   for (const control of document.querySelectorAll('button, input, select, textarea')) control.disabled = busy || control.dataset.locked === 'true';
   $('import-button').disabled = busy || !previewReady || !$('naver-files').files.length || !$('courier-files').files.length || !$('carrier').value;
+  $('rematch-saved-form').hidden = !current?.run.rematchAvailable;
+  if ($('rematch-saved-form').hidden) $('saved-naver-password').value = '';
+  $('rematch-saved-button').disabled = $('saved-naver-password').disabled = busy || dirty;
   $('save-button').disabled = busy || !dirty || scopeUnavailable() || current?.rematchRequired;
   $('export-button').disabled = busy || !current || dirty || needsReview || !exportable;
   $('check-button').disabled = busy || !current || dirty || (!current.items.length && !current.outsideOrders?.length) || scopeUnavailable() || current.rematchRequired;
@@ -630,14 +633,16 @@ function renderUnmatched() {
 function showRun(data) {
   data.rematchRequired ??= !data.run.matchingVersion;
   current = data; itemChanges.clear(); issueChanges.clear(); trackingChanges.clear(); $('upload-section').hidden = false; $('preview-section').hidden = true; $('run-section').hidden = false;
+  $('saved-naver-password').value = '';
   renderPreview();
   const dates = [...new Set([...(data.batches || []).map(batch => workDate(batch.createdAt)), ...data.items.map(item => item.sourceDate).filter(Boolean)])].sort();
   $('source-message').textContent = `처리 날짜 ${data.run.sourceDate || selectedSourceDate} · ${dates.length ? `원본 날짜 ${dates.join(' · ')}` : '연결된 저장 원본 없음'} · ① 네이버 파일 기준으로 매칭합니다.`;
   const unavailable = scopeUnavailable();
-  $('saved-files').hidden = unavailable; $('import-form').hidden = !unavailable && !data.rematchRequired;
+  $('saved-files').hidden = unavailable && !data.run.rematchAvailable; $('import-form').hidden = !unavailable && !data.rematchRequired;
   $('saved-file-list').textContent = (data.files || []).map(file => `${file.kind === 'naver' ? '① 네이버' : '③ 택배사'}: ${file.name}`).join('\n');
-  $('scope-note').hidden = !unavailable && !data.rematchRequired; $('scope-note').textContent = data.scopeRequired
-    ? '이전 결과는 매칭 범위가 없어 사용할 수 없습니다. 왼쪽 날짜를 선택한 뒤 파일을 다시 매칭해 주세요.'
+  $('scope-note').hidden = !unavailable && !data.rematchRequired; $('scope-note').textContent = data.run.rematchAvailable
+    ? '이전 매칭 결과입니다. 저장 원본으로 다시 매칭할 수 있습니다.'
+    : data.scopeRequired ? '이전 결과는 매칭 범위가 없어 사용할 수 없습니다. 왼쪽 날짜를 선택한 뒤 파일을 다시 매칭해 주세요.'
     : unavailable ? '현재 실행 중인 system0 서버가 이전 버전입니다. 서버를 재시작한 뒤 새 송장 처리를 시작해 주세요.'
     : '이전 방식으로 매칭한 내역입니다. 다른 날짜의 주문까지 찾으려면 같은 ①·③ 파일을 다시 선택해 매칭하세요. 기존 검토·파일 생성 내역은 보존됩니다.';
   $('run-title').textContent = '송장 매칭 결과';
@@ -677,6 +682,20 @@ async function importFiles(event) {
   setBusy(true); message('송장을 매칭하고, 이번 네이버 파일에 없는 관련 주문의 등록 상태를 조회하고 있습니다.');
   try { showRun(await api('/api/invoices/import', { method: 'POST', body: form })); $('naver-password').value = ''; message('매칭 결과와 경고를 확인한 뒤 엑셀을 다운로드하세요.'); await loadHistory(); }
   catch (error) { message(error.message, true); }
+  finally { setBusy(false); }
+}
+async function rematchSavedFiles(event) {
+  event.preventDefault();
+  if (busy || isDirty() || !current?.run.rematchAvailable) return;
+  const password = $('saved-naver-password'), naverPassword = password.value;
+  const runId = current.run.id;
+  password.value = '';
+  setBusy(true); message('저장 원본으로 송장을 다시 매칭하고 있습니다.');
+  try {
+    const next = await api(`/api/invoices/${runId}/rematch`, invoiceActionOptions(naverPassword ? { naverPassword } : {}));
+    showRun(next); message(next.run.id === runId ? '저장 원본의 매칭 결과가 기존 작업과 같습니다.' : '저장 원본으로 다시 매칭했습니다.');
+    await loadHistory();
+  } catch (error) { message(error.message, true); }
   finally { setBusy(false); }
 }
 async function saveReview() {
@@ -1008,6 +1027,7 @@ function toggleHistory() {
   $('history-toggle').setAttribute('aria-expanded', String(!collapsed));
 }
 $('import-form').addEventListener('submit', importFiles);
+$('rematch-saved-form').addEventListener('submit', rematchSavedFiles);
 $('naver-files').addEventListener('change', () => fileList('naver-files', 'naver-file-list', '선택한 파일이 없습니다. 여러 파일을 함께 올릴 수 있습니다.'));
 $('courier-files').addEventListener('change', () => fileList('courier-files', 'courier-file-list', '송장번호가 들어 있는 택배사 출력파일을 선택하세요.'));
 $('carrier').addEventListener('change', refreshControls);

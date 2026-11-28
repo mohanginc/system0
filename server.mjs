@@ -19,7 +19,7 @@ import { previewShippingBoard } from './lib/shipping-preview.mjs';
 import { productCatalog, addProduct, linkProductName, productCostHistory, addProductCost } from './lib/products.mjs';
 import { getOrderIntake, collectOrderIntake, normalizeOrderIntake, reviseOrderIntake, importCoupangOrders } from './lib/order-intake.mjs';
 import { getOrderPacking, reviseOrderPacking, registerOrderDispatch } from './lib/order-packing.mjs';
-import { CARRIERS, unlockNaverFiles, classifyInvoiceFiles, prepareInvoiceFile, importInvoiceFiles, listInvoiceRuns, listInvoiceDrafts, reviseInvoiceItems,
+import { CARRIERS, unlockNaverFiles, classifyInvoiceFiles, prepareInvoiceFile, importInvoiceFiles, savedInvoiceInputs, listInvoiceRuns, listInvoiceDrafts, reviseInvoiceItems,
   exportInvoices, downloadInvoices, latestInvoice, refreshInvoiceStatus, refreshOutsideInvoiceStatus,
   invoiceView, invoiceSourceView, invoiceDateRunIds, checkInvoiceDate, applyInvoiceTrackingReview, confirmInvoiceTracking, lookupInvoiceOrder } from './lib/invoices.mjs';
 import { createInvoiceExportFile, listInvoiceExportFiles, downloadInvoiceExportFile } from './lib/invoice-export-files.mjs';
@@ -148,7 +148,9 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
   app.post('/api/products/:barcode/costs', (request, response) => response.status(201).json(addProductCost(db, request.params.barcode, request.body || {})));
   app.use('/api/invoices', (_request, response, next) => { response.set('Cache-Control', 'no-store'); next(); });
   app.get('/api/invoices/meta', (_request, response) => response.json({ carriers: CARRIERS }));
-  app.get('/api/invoices/drafts', (request, response) => response.json({ drafts: listInvoiceDrafts(db, request.query.date) }));
+  app.get('/api/invoices/drafts', (request, response) => response.json({ drafts: listInvoiceDrafts(db, request.query.date, {
+    includeHistory: request.query.includeHistory === 'true',
+  }) }));
   app.get('/api/invoices/latest', (request, response) => {
     const detail = latestInvoice(db, request.query.date);
     response.json({ invoice: detail ? invoiceView(db, detail.run.id) : null });
@@ -172,6 +174,13 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
     finally { for (const id of runIds) invoiceChecking.delete(id); }
   });
   app.get('/api/invoices', (request, response) => response.json({ runs: listInvoiceRuns(db, request.query.date) }));
+  const sendMatchedInvoice = async (response, detail) => {
+    invoiceChecking.add(detail.run.id);
+    try {
+      if (!detail.run.outsideCheckedAt || detail.outsideOrders.some(order => !order.checkedAt)) await refreshOutsideInvoiceStatus(db, detail.run.id, naver);
+      response.status(201).json(invoiceView(db, detail.run.id));
+    } finally { invoiceChecking.delete(detail.run.id); }
+  };
   app.post('/api/invoices/import', invoiceUpload, async (request, response) => {
     if (invoiceChecking.size) return response.status(409).json({ error: '송장 등록 상태를 확인 중입니다. 완료 후 파일을 올려 주세요.' });
     const carrier = CARRIERS.find(value => value.code === request.body?.deliveryCompanyCode);
@@ -193,11 +202,7 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
     const preparedNaverFiles = genericFiles.length ? naverFiles : await unlockNaverFiles(naverFiles, request.body?.naverPassword);
     if (invoiceChecking.size) return response.status(409).json({ error: '송장 등록 상태를 확인 중입니다. 완료 후 파일을 올려 주세요.' });
     const detail = importInvoiceFiles(db, { naverFiles: preparedNaverFiles, courierFiles, carrier, batchIds, sourceDate, runningBatchIds: [...running] });
-    invoiceChecking.add(detail.run.id);
-    try {
-      if (!detail.run.outsideCheckedAt || detail.outsideOrders.some(order => !order.checkedAt)) await refreshOutsideInvoiceStatus(db, detail.run.id, naver);
-      response.status(201).json(invoiceView(db, detail.run.id));
-    } finally { invoiceChecking.delete(detail.run.id); }
+    await sendMatchedInvoice(response, detail);
   });
   const ensureInvoice = (request, response, mutating = false) => {
     const id = Number(request.params.id);
@@ -213,6 +218,29 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
   app.get('/api/invoices/:id', (request, response) => {
     const id = ensureInvoice(request, response);
     if (id) response.json(invoiceView(db, id));
+  });
+  app.post('/api/invoices/:id/rematch', async (request, response) => {
+    const id = ensureInvoice(request, response, true);
+    if (!id) return;
+    const options = request.body ?? {};
+    if (typeof options !== 'object' || Array.isArray(options) || Object.keys(options).some(key => key !== 'naverPassword')) {
+      throw new Error('저장된 작업 번호와 네이버 파일 암호만 지정해 주세요.');
+    }
+    const busy = () => response.status(409).json({ error: '송장 등록 상태를 확인 중입니다. 완료 후 다시 매칭해 주세요.' });
+    if (invoiceChecking.size) return busy();
+    try {
+      const inputs = await savedInvoiceInputs(db, id, options.naverPassword);
+      if (invoiceChecking.size) return busy();
+      const before = db.prepare('SELECT MAX(id) AS id FROM invoice_runs').get().id;
+      const detail = importInvoiceFiles(db, { ...inputs, runningBatchIds: [...running] });
+      if (detail.run.id <= before) return response.json(invoiceView(db, detail.run.id));
+      await sendMatchedInvoice(response, detail);
+    } catch (error) {
+      if (['invoice_source_password_required', 'invoice_source_password_invalid', 'invoice_rematch_unavailable', 'invoice_rematch_superseded'].includes(error.code)) {
+        return response.status(error.status || 400).json({ error: error.message, code: error.code });
+      }
+      throw error;
+    }
   });
   app.patch('/api/invoices/:id/items', (request, response) => {
     const id = ensureInvoice(request, response, true);
