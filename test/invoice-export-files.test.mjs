@@ -104,5 +104,9 @@ test('독립 엑셀만 생성한 작업도 날짜 이력에서 열고 보관 원
   assert.equal(created.generatedAt, null);
   assert.equal(created.savedFileAvailable, false);
   assert.deepEqual(listInvoiceDrafts(db, before.run.sourceDate), []);
-  assert.deepEqual(invoiceView(db, id), before);
+  const after = invoiceView(db, id);
+  assert.equal(before.run.rematchAvailable, true);
+  assert.equal(after.run.rematchAvailable, false);
+  assert.notEqual(after.viewVersion, before.viewVersion);
+  assert.deepEqual({ ...after, run: { ...after.run, rematchAvailable: true }, viewVersion: before.viewVersion }, before);
 });
