@@ -23,11 +23,20 @@ const productLabel = order => order?.cleanedName || order?.productName || '상�
 export const orderNumber = order => order.provider === 'coupang' ? order.orderId : order.productOrderId;
 const boxQuantity = box => box.items.reduce((sum, item) => sum + item.quantity, 0);
 
-export function createPackingEditor({ api, isBusy, setBusy, message, renderOrders, reloadOrders }) {
+export function createPackingEditor({ api, isBusy, setBusy, message, renderOrders, reloadOrders, onDispatch }) {
   let packing = null, draftBoxes = [], orderById = new Map(), remaining = new Map(), dispatchChoices = [];
+  let scopeOrderIds = null;
   const releasedBoxes = new Set(), selectedItems = new Map();
+  const inScope = id => scopeOrderIds === null || scopeOrderIds.has(id);
+  const boxInScope = box => box.items.every(item => inScope(item.orderItemId));
 
   function hasChanges() { return Boolean(releasedBoxes.size || draftBoxes.length); }
+
+  function visibleBoxes() {
+    const saved = (packing?.boxes || []).filter(box => !releasedBoxes.has(box.id))
+      .map(box => ({ ...box, title: '상자 ' + box.id }));
+    return [...saved, ...draftBoxes.map((box, index) => ({ title: '새 상자 ' + (index + 1), items: box.items }))];
+  }
 
   function remainingQuantities() {
     const released = countsByOrder(packing.boxes.filter(box => releasedBoxes.has(box.id)));
@@ -41,11 +50,13 @@ export function createPackingEditor({ api, isBusy, setBusy, message, renderOrder
 
   function eligibleDispatch() {
     if (!packing) return [];
-    const boxes = packing.boxes.filter(box => !box.needsReview).map(box => ({
+    const boxes = packing.boxes.filter(box => !box.needsReview && boxInScope(box)).map(box => ({
       boxId: box.id, quantity: boxQuantity(box), title: `상자 ${box.id}`,
-      detail: box.items.map(item => `${productLabel(orderById.get(item.orderItemId))} ${count(item.quantity)}개`).join(' · '),
+      detail: [...box.items.map(item => `${productLabel(orderById.get(item.orderItemId))} ${count(item.quantity)}개`),
+        ...(box.hasDeliveryOverride ? [box.shipping.recipient, box.shipping.baseAddress, box.shipping.detailedAddress] : [])]
+        .filter(Boolean).join(' · '),
     }));
-    const units = packing.orders.filter(order => order.state === 'pending' && order.destinationReady && order.availableQuantity > 0)
+    const units = packing.orders.filter(order => inScope(order.id) && order.state === 'pending' && order.destinationReady && order.availableQuantity > 0)
       .map(order => ({ orderItemId: order.id, quantity: order.availableQuantity, title: productLabel(order),
         detail: [order.recipient, orderNumber(order)].filter(Boolean).join(' · ') }));
     return [...boxes, ...units];
@@ -61,11 +72,24 @@ export function createPackingEditor({ api, isBusy, setBusy, message, renderOrder
     $('confirm-dispatch').disabled = busy || !dispatchChoices.some(choice => choice.checked);
   }
 
-  function picker(orderId) {
+  function packingFeedback(text = '', error = false) {
+    const notice = $('pack-feedback');
+    notice.setAttribute('role', error ? 'alert' : 'status');
+    notice.classList.toggle('error', error);
+    notice.textContent = text;
+    notice.hidden = !text;
+  }
+
+  function picker(orderId, allocations, { canPick = true } = {}) {
+    const content = document.createDocumentFragment();
+    for (const { box, quantity } of allocations) {
+      content.append(element('small', box.title + ' · ' + count(quantity) + '개', 'box-allocation'));
+    }
+    if (!canPick) return content;
     const available = remaining.get(orderId) || 0;
     if (available <= 0) {
       selectedItems.delete(orderId);
-      return element('small', packing && orderById.get(orderId)?.allocatedQuantity ? '배정 완료' : '—');
+      return allocations.length ? content : element('small', packing && orderById.get(orderId)?.allocatedQuantity ? '배정 완료' : '—');
     }
     const control = element('div', undefined, 'pack-picker');
     const order = orderById.get(orderId), check = element('input');
@@ -78,24 +102,30 @@ export function createPackingEditor({ api, isBusy, setBusy, message, renderOrder
     if (selectedItems.get(orderId) > available) selectedItems.set(orderId, available);
     quantity.value = String(selectedItems.get(orderId) ?? available);
     check.addEventListener('change', () => {
+      packingFeedback();
       quantity.disabled = !check.checked;
       if (check.checked) selectedItems.set(orderId, Number(quantity.value));
       else selectedItems.delete(orderId);
       syncControls();
     });
-    quantity.addEventListener('input', () => selectedItems.set(orderId, Number(quantity.value)));
+    quantity.addEventListener('input', () => {
+      packingFeedback();
+      selectedItems.set(orderId, Number(quantity.value));
+    });
     control.append(check, quantity, element('small', `미배정 ${count(available)}개`));
-    return control;
+    content.append(control);
+    return content;
   }
 
   function boxRow(box, title) {
     const row = element('li', undefined, 'pack-box'), body = element('div', undefined, 'pack-box-body');
     const items = element('ul', undefined, 'pack-box-items'), recipients = new Set();
+    if (box.shipping?.recipient) recipients.add(box.shipping.recipient);
     for (const item of box.items) {
       const order = orderById.get(item.orderItemId);
       const line = element('li', `${productLabel(order)} · ${count(item.quantity)}개`);
       if (order) {
-        recipients.add(order.recipient || '수취인 미확인');
+        if (!box.shipping?.recipient) recipients.add(order.recipient || '수취인 미확인');
         line.append(element('small', orderNumber(order), 'pack-box-meta'));
       }
       items.append(line);
@@ -107,9 +137,9 @@ export function createPackingEditor({ api, isBusy, setBusy, message, renderOrder
     return row;
   }
 
-  function renderBoxes() {
+  function renderBoxes(boxes) {
     const saved = document.createDocumentFragment();
-    for (const box of packing.boxes) {
+    for (const box of boxes) {
       const released = releasedBoxes.has(box.id), row = boxRow(box, `상자 ${box.id}`);
       row.classList.toggle('is-released', released);
       if (released) row.querySelector('.pack-box-body').append(element('small', '풀기 예정', 'pack-box-meta'));
@@ -120,8 +150,8 @@ export function createPackingEditor({ api, isBusy, setBusy, message, renderOrder
       row.append(button); saved.append(row);
     }
     $('saved-boxes').replaceChildren(saved);
-    $('saved-count').textContent = `${count(packing.boxes.length)}개`;
-    $('saved-section').hidden = !packing.boxes.length;
+    $('saved-count').textContent = `${count(boxes.length)}개`;
+    $('saved-section').hidden = !boxes.length;
   }
 
   function renderPreview() {
@@ -129,7 +159,7 @@ export function createPackingEditor({ api, isBusy, setBusy, message, renderOrder
     const changes = [];
     if (releasedBoxes.size) changes.push(`상자 ${count(releasedBoxes.size)}개 풀기`);
     if (draftBoxes.length) changes.push(`상자 ${count(draftBoxes.length)}개 추가`);
-    const unallocated = [...remaining.values()].reduce((sum, value) => sum + Math.max(0, value), 0);
+    const unallocated = [...remaining].reduce((sum, [id, value]) => sum + (inScope(id) ? Math.max(0, value) : 0), 0);
     changes.push(`저장 후 미배정 ${count(unallocated)}개`);
     $('preview-summary').textContent = changes.join(' · ');
     $('save-packing').textContent = draftBoxes.length ? '포장 변경 저장' : '상자 풀기 저장';
@@ -152,17 +182,25 @@ export function createPackingEditor({ api, isBusy, setBusy, message, renderOrder
 
   function render() {
     remaining = packing ? remainingQuantities() : new Map();
+    packingFeedback();
     renderOrders();
-    $('packing').hidden = !packing || (!packing.boxes.length && !hasChanges());
-    $('dispatch-section').hidden = !packing || (!packing.orders.length && !packing.boxes.length);
+    const boxes = packing?.boxes.filter(boxInScope) || [];
+    const orders = packing?.orders.filter(order => inScope(order.id)) || [];
+    $('packing').hidden = !boxes.length && !hasChanges();
+    $('dispatch-section').hidden = !orders.length && !boxes.length;
     closeDispatch();
     if (packing) {
-      const { boxCount, reviewBoxCount, allocatedQuantity, unallocatedQuantity } = packing.summary;
-      const summary = [`저장한 상자 ${count(boxCount)}개`, `배정 ${count(allocatedQuantity)}개`, `미배정 ${count(unallocatedQuantity)}개`];
+      const reviewBoxCount = boxes.filter(box => box.needsReview).length;
+      const allocatedQuantity = orders.reduce((sum, order) => sum + order.allocatedQuantity, 0);
+      const unallocatedQuantity = orders.reduce((sum, order) => sum + order.availableQuantity, 0);
+      const summary = [`저장한 상자 ${count(boxes.length)}개`, `배정 ${count(allocatedQuantity)}개`, `미배정 ${count(unallocatedQuantity)}개`];
       if (reviewBoxCount) summary.push(`확인 필요 상자 ${count(reviewBoxCount)}개`);
+      if (packing.boxes.some(box => !boxInScope(box) && box.items.some(item => inScope(item.orderItemId)))) {
+        summary.push('함께 담긴 주문을 모두 조회하면 상자를 변경하거나 출고할 수 있습니다.');
+      }
       $('packing-summary').textContent = summary.join(' · ');
       $('dispatch-available').textContent = `등록 가능 ${count(eligibleDispatch().length)}상자`;
-      renderBoxes(); renderPreview();
+      renderBoxes(boxes); renderPreview();
     } else $('packing-summary').textContent = '';
     syncControls();
   }
@@ -184,30 +222,32 @@ export function createPackingEditor({ api, isBusy, setBusy, message, renderOrder
   function addBox(event) {
     event.preventDefault();
     if (isBusy() || !selectedItems.size) return;
+    message('');
     const items = [...selectedItems].map(([orderItemId, quantity]) => ({ orderItemId, quantity }));
     if (items.some(({ orderItemId, quantity }) => !Number.isSafeInteger(quantity) || quantity < 1 || quantity > remaining.get(orderItemId))) {
-      message('담을 수량을 확인해 주세요.', true);
+      packingFeedback('담을 수량을 확인해 주세요.', true);
       return;
     }
     const selected = items.map(item => orderById.get(item.orderItemId));
     if (selected.length > 1 && selected.some(order => !order.destinationReady)) {
-      message('배송지 확인이 필요한 주문은 상품주문별로 상자를 만들어 주세요.', true);
+      packingFeedback('배송지 확인이 필요한 주문은 하나씩 선택해 상자를 만들어 주세요.', true);
       return;
     }
     if (new Set(selected.map(order => order.destinationGroup)).size > 1) {
-      message('배송지가 다른 주문은 각각 상자로 만들어 주세요.', true);
+      packingFeedback('수취인 또는 배송지가 다릅니다. 주문을 하나씩 선택해 각각 상자를 만들어 주세요.', true);
       return;
     }
     draftBoxes.push({ items, needsReview: selected.some(order => !order.destinationReady) });
     selectedItems.clear();
-    render(); message('새 상자를 미리보기에 추가했습니다.');
+    render(); packingFeedback('새 상자를 미리보기에 추가했습니다.');
   }
 
   function discardChanges() {
     releasedBoxes.clear(); selectedItems.clear(); draftBoxes = [];
   }
 
-  function setState(data) {
+  function setState(data, orderIds) {
+    if (orderIds !== undefined) scopeOrderIds = new Set(orderIds);
     packing = data; orderById = new Map((data?.orders || []).map(order => [order.id, order]));
     discardChanges(); render();
   }
@@ -259,6 +299,7 @@ export function createPackingEditor({ api, isBusy, setBusy, message, renderOrder
       const data = await api('/api/order-intake/dispatch', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ expectedVersion: packing.version, boxIds: selected.flatMap(item => item.boxId ? [item.boxId] : []),
           orderItemIds: selected.flatMap(item => item.orderItemId ? [item.orderItemId] : []) }) });
+      onDispatch?.();
       window.location.assign(`/shipping-board.html?${new URLSearchParams({ date: data.date })}`);
     } catch (error) {
       message(error.status === 409 ? `${error.message} 목록을 새로고침해 주세요.` : error.message, true);
@@ -273,5 +314,5 @@ export function createPackingEditor({ api, isBusy, setBusy, message, renderOrder
   $('open-dispatch').addEventListener('click', openDispatch);
   $('cancel-dispatch').addEventListener('click', () => { closeDispatch(); syncControls(); $('open-dispatch').focus(); });
   $('confirm-dispatch').addEventListener('click', registerDispatch);
-  return { setState, picker, order: id => orderById.get(id), hasChanges, syncControls };
+  return { setState, picker, visibleBoxes, order: id => orderById.get(id), version: () => packing?.version, hasChanges, syncControls };
 }

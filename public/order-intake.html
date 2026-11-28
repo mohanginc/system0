@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>주문 수집 · system0</title>
+  <title>주문 수집 및 관리 · system0</title>
   <link rel="icon" type="image/svg+xml" href="/assets/brand-star.svg">
   <link rel="stylesheet" href="/styles.css">
   <link rel="stylesheet" href="/order-intake.css">
@@ -18,8 +18,9 @@
   </header>
   <main>
     <div class="intake-heading">
-      <h1>주문 수집</h1>
+      <h1>주문 수집 및 관리</h1>
       <div class="intake-actions">
+        <label class="intake-range" for="collection-date">수집 작업일 <input id="collection-date" type="date" required></label>
         <div class="intake-range"><label for="collection-range">결제 기간</label>
           <select id="collection-range">
             <option value="7">최근 7일</option>
@@ -42,10 +43,16 @@
         </div>
         <button id="retry-button" type="button" hidden>상품명 정리 재시도</button>
       </div>
+      <form id="intake-search" class="intake-search" role="search" aria-label="저장된 주문 검색">
+        <label class="intake-range" for="search-date">수집 작업일 <input id="search-date" type="date"></label>
+        <label class="intake-range" for="search-recipient">수취인 <input id="search-recipient" type="search" maxlength="100" autocomplete="off"></label>
+        <button type="submit">검색</button>
+        <button id="reset-search" type="button" hidden>검색 초기화</button>
+      </form>
       <form id="pack-form">
         <fieldset id="pick-controls" disabled>
           <table id="intake-table" class="intake-table" hidden>
-            <thead><tr><th scope="col">채널 · 주문번호 · 수취인</th><th scope="col">제품명 원본 · 옵션</th><th scope="col">정리된 제품명 · 바코드</th><th scope="col">잔여</th><th scope="col">상태</th><th scope="col">상자에 담기</th></tr></thead>
+            <thead><tr><th scope="col">주문 · 배송 정보</th><th scope="col">제품명 원본 · 옵션</th><th scope="col">정리된 제품명 · 바코드</th><th scope="col">수량</th><th scope="col">상태</th><th scope="col">상자에 담기</th></tr></thead>
             <tbody id="intake-rows"></tbody>
           </table>
         </fieldset>
@@ -55,6 +62,7 @@
         <p id="packing-summary" class="pack-summary"></p>
         <button id="reload-packing" type="button" disabled>목록 새로고침</button>
         <button id="add-box" type="submit" form="pack-form" disabled>선택 상품 상자 만들기</button>
+        <p id="pack-feedback" role="status" hidden></p>
       </div>
     </section>
     <div id="packing" class="pack-layout" hidden>
@@ -98,6 +106,26 @@
         <div class="intake-actions">
           <button id="close-review" type="button">닫기</button>
           <button id="save-review" class="primary" type="submit">저장</button>
+        </div>
+      </form>
+    </dialog>
+    <dialog id="order-delivery" class="intake-review" aria-labelledby="delivery-title">
+      <form id="delivery-form">
+        <h2 id="delivery-title">배송 정보 수정</h2>
+        <p id="delivery-original" class="review-original"></p>
+        <div class="intake-delivery-fields">
+          <label class="intake-field">수취인 <input id="delivery-recipient" type="text" maxlength="100" autocomplete="off"></label>
+          <label class="intake-field">전화번호 <input id="delivery-phone" type="tel" maxlength="40" autocomplete="off"></label>
+          <label class="intake-field intake-field-wide">기본 주소 <input id="delivery-base-address" type="text" maxlength="300" autocomplete="off"></label>
+          <label class="intake-field intake-field-wide">상세 주소 <input id="delivery-detailed-address" type="text" maxlength="300" autocomplete="off"></label>
+          <label class="intake-field">우편번호 <input id="delivery-postal-code" type="text" inputmode="numeric" maxlength="12" autocomplete="off"></label>
+          <label class="intake-field intake-field-wide">배송 메모 <textarea id="delivery-memo" maxlength="500" rows="2"></textarea></label>
+        </div>
+        <label id="delivery-hold-control" class="intake-hold"><input id="delivery-hold" type="checkbox"> system0 출고 보류</label>
+        <p id="delivery-error" role="alert" hidden></p>
+        <div class="intake-actions">
+          <button id="close-delivery" type="button">닫기</button>
+          <button type="submit" class="primary">저장</button>
         </div>
       </form>
     </dialog>

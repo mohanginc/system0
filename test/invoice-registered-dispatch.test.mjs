@@ -51,8 +51,8 @@ function naverWorkbook(products) {
 function courierWorkbook(issued) {
   return file('로젠 출력완료.xlsx', [
     ['운송장번호', '주문번호', '차수', '원송장번호', '발행횟수', '출력시간', '이름', '전화', '주소'],
-    ...issued.map(([tracking, reference, name = recipient]) =>
-      [tracking, reference, 1, '', 1, '16:00:00', name, phone, address]),
+    ...issued.map(([tracking, reference, name = recipient, labelPhone = phone, labelAddress = address]) =>
+      [tracking, reference, 1, '', 1, '16:00:00', name, labelPhone, labelAddress]),
   ]);
 }
 
@@ -212,7 +212,7 @@ test('매칭 뒤 취소 확인된 출고 상자는 이미 연결한 송장 엑�
   unchanged();
 });
 
-test('한 상품주문의 등록 상자 두 개는 대표 송장을 선택하고 실물 송장을 모두 보존한다', async t => {
+test('한 상품주문의 등록 상자 두 개는 첫 송장을 대표로 쓰고 실물 송장을 모두 보존한다', async t => {
   const product = { ...order(5, '두 개 주문한 쿠션'), quantity: 2 };
   const naver = { listNewOrders: async () => ({ orders: [product] }), queryProductOrders: async () => [] };
   const { db, request } = await boot(t, naver);
@@ -238,20 +238,179 @@ test('한 상품주문의 등록 상자 두 개는 대표 송장을 선택하고
   assert.equal((await action(partial, '/file', { mode: 'auto' })).status, 400);
 
   const imported = await upload(issued);
-  assert.equal(imported.trackingReview.pendingCount, 1);
-  const [group] = imported.trackingReview.groups;
-  assert.equal(group.splitEligible, true);
-  assert.equal(group.replaceEligible, false);
-  assert.deepEqual(group.candidates.map(parcel => parcel.trackingNumber).sort(), trackingNumbers);
-  assert.equal((await action(imported, '/file', { mode: 'auto' })).status, 400);
-  const selected = JSON.parse(await responseBytes(await action(imported, '/tracking', {
-    choices: [{ key: group.key, trackingNumber: trackingNumbers[1], mode: 'split' }],
-  }), 200));
-  assert.equal(selected.trackingReview.pendingCount, 0);
-  assert.deepEqual(selected.items[0].physicalShipments.map(parcel => [parcel.trackingNumber, parcel.valid]).sort(),
+  assert.equal(imported.trackingReview.pendingCount, 0);
+  assert.equal(imported.fileActions.create, true);
+  assert.equal(imported.items[0].trackingNumber, trackingNumbers[0]);
+  assert.deepEqual(imported.items[0].physicalShipments.map(parcel => [parcel.trackingNumber, parcel.valid]).sort(),
     trackingNumbers.map(number => [number, true]));
-  const excel = workbookRows(await responseBytes(await action(selected, '/file', { mode: 'auto' }), 200));
-  assert.deepEqual(excel.slice(1).map(row => [row[0], row[3]]), [[product.productOrderId, trackingNumbers[1]]]);
+  const excel = workbookRows(await responseBytes(await action(imported, '/file', { mode: 'auto' }), 200));
+  assert.deepEqual(excel.slice(1).map(row => [row[0], row[3]]), [[product.productOrderId, trackingNumbers[0]]]);
+
+  const [naverHeaders, naverRow] = workbookRows(orders.buffer);
+  naverRow[naverHeaders.indexOf('주문상태')] = 'DELIVERING';
+  const registered = await uploadFiles(request, date, file(orders.originalname, [
+    [...naverHeaders, '송장번호', '택배사'], [...naverRow, trackingNumbers[1], 'KGB'],
+  ]), courierWorkbook(issued));
+  assert.equal(registered.items[0].trackingNumber, trackingNumbers[1]);
+  assert.equal(registered.items[0].sourceRegistered, true);
+  assert.equal(registered.fileActions.create, false);
+});
+
+test('배송지가 다른 분리 상자는 각 송장을 검증하고 파일에서 먼저 나온 송장을 대표로 쓴다', async t => {
+  const product = { ...order(9, '가상 네이버 09'), quantity: 2 };
+  Object.assign(product.sourcePayload.content.productOrder, { remainQuantity: 2, remainProductAmount: 18000 });
+  const naver = { listNewOrders: async () => ({ orders: [product] }), queryProductOrders: async () => [] };
+  const { request } = await boot(t, naver);
+  const json = (method, data) => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) });
+  const read = async (path, options, status = 200) => JSON.parse(await responseBytes(await request(path, options), status));
+  const packingPath = '/api/order-intake/packing';
+
+  await read('/api/order-intake/collect', json('POST', {}));
+  const initial = await read(packingPath);
+  const [{ id }] = initial.orders;
+  const packed = await read(packingPath, json('PATCH', { expectedVersion: initial.version, removeBoxIds: [],
+    boxes: Array.from({ length: 2 }, () => ({ items: [{ orderItemId: id, quantity: 1 }] })) }));
+  assert.ok(packed.boxes.every(box => box.canEditDelivery));
+  const [first, second] = packed.boxes;
+  const shipping = { recipient: '가상 분리 수취인', phone: '010-0000-1209', baseAddress: '경기 성남시 분당구 가상길 9',
+    detailedAddress: '909호', postalCode: '13579', memo: '문 앞 요청' };
+  const override = (box, version) => read(`${packingPath}/boxes/${box.id}/delivery`, json('PATCH', { expectedVersion: version, shipping }));
+  const revised = await override(second, packed.version);
+  assert.notEqual(revised.version, packed.version);
+  assert.deepEqual(revised.boxes.find(box => box.id === first.id).shipping, first.shipping);
+  const changed = revised.boxes.find(box => box.id === second.id);
+  assert.deepEqual(Object.fromEntries(Object.keys(shipping).map(field => [field, changed.shipping[field]])), shipping);
+  assert.deepEqual(changed.items, second.items);
+  assert.equal(changed.needsReview, false);
+  const { orders: [savedOrder] } = await read('/api/order-intake?view=management');
+  assert.deepEqual([savedOrder.recipient, savedOrder.shipping.phone, savedOrder.shipping.baseAddress, savedOrder.shipping.detailedAddress],
+    [recipient, phone, baseAddress, detailedAddress]);
+
+  const dispatched = await read('/api/order-intake/dispatch', json('POST', { expectedVersion: revised.version,
+    boxIds: [first.id, second.id], orderItemIds: [] }));
+  const { date } = dispatched;
+  assert.equal(dispatched.registeredQuantity, 2);
+  const board = await read('/api/shipping/board?date=' + date);
+  const shipments = board.registered.groups.flatMap(group => group.shipments);
+  assert.deepEqual(shipments.map(box => [box.recipient, box.phone, box.neighborhood]).sort(), [
+    [recipient, phone, '서울 강남구'], [shipping.recipient, shipping.phone, '경기 성남시 분당구'],
+  ].sort());
+
+  const [headers, ...boxes] = workbookRows(await responseBytes(await request('/api/shipping/logen-export?date=' + date), 200));
+  const map = row => Object.fromEntries(headers.map((name, index) => [name, row[index]]));
+  const exports = boxes.map(map);
+  const labelFields = row => [row['송화주'], row['전화번호'], row['주소'], row['우편번호'], row['가격'], row['체결번호']];
+  assert.deepEqual(exports.map(labelFields).sort(), [
+    [recipient, phone, address, shippingAddress.zipCode, '9000', product.orderId],
+    [shipping.recipient, shipping.phone, `${shipping.baseAddress} ${shipping.detailedAddress}`, shipping.postalCode, '9000', product.orderId],
+  ].sort());
+  assert.equal(boxes.find(row => row[0] === shipping.recipient)[6], shipping.memo);
+  const trackingNumbers = ['45670000111', '45670000112'];
+  const labels = exports.sort((a, b) => b['주문번호'].localeCompare(a['주문번호']))
+    .map((row, index) => [trackingNumbers[1 - index], row['주문번호'], row['송화주'], row['전화번호'], row['주소']]);
+  assert.ok(labels[0][1] > labels[1][1]);
+  const upload = parcels => uploadFiles(request, date, naverWorkbook([product]), courierWorkbook(parcels));
+  const missing = await upload(labels.slice(1));
+  assert.equal(missing.fileActions.create, false);
+  const mismatch = await upload(labels.map((label, index) => [...label.slice(0, 2), ...labels[1 - index].slice(2)]));
+  assert.ok(mismatch.issues.some(issue => issue.kind === 'box_recipient_mismatch' && issue.blocking));
+  assert.equal(mismatch.fileActions.create, false);
+
+  const imported = await upload(labels);
+  const [representative] = labels[0];
+  assert.equal(imported.trackingReview.pendingCount, 0);
+  assert.equal(imported.fileActions.create, true);
+  assert.equal(imported.items[0].trackingNumber, representative);
+  const invoicePath = '/api/invoices/' + imported.run.id;
+  assert.deepEqual(imported.items[0].physicalShipments.map(parcel => [parcel.trackingNumber, parcel.valid]).sort(),
+    trackingNumbers.map(number => [number, true]));
+  const excel = workbookRows(await responseBytes(await request(invoicePath + '/file',
+    json('POST', { expectedVersion: imported.viewVersion, mode: 'auto' })), 200));
+  assert.deepEqual(excel.slice(1).map(row => [row[0], row[3]]), [[product.productOrderId, representative]]);
+});
+
+test('가상 주문 수집부터 네이버 송장 엑셀까지 합배송·분리배송과 수동 취소를 검증한다', async t => {
+  t.mock.timers.enable({ apis: ['Date'], now: new Date('2026-11-27T03:00:00Z') });
+  const combined = [order(30, '가상 쿠션'), order(31, '가상 방수커버')];
+  const split = { ...order(32, '가상 분리 쿠션', '2026112712345032'), quantity: 2 };
+  const extra = order(33, '가상 취소 주문', '2026112712345033');
+  const products = [...combined, split, extra];
+  const naver = { listNewOrders: async () => ({ orders: products }), queryProductOrders: async () => [] };
+  const { request } = await boot(t, naver);
+  const base = '/api/order-intake', packingPath = base + '/packing';
+  const json = (method, value) => ({ method, headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
+  const read = async (path, options, status = 200) => JSON.parse(await responseBytes(await request(path, options), status));
+  await read(base + '/collect', json('POST', {}));
+  const collected = await read(base + '?view=management');
+  assert.deepEqual(collected.orders.map(item => [item.productOrderId, item.quantity]).sort(), products.map(item => [item.productOrderId, item.quantity]).sort());
+  const byProduct = new Map(collected.orders.map(item => [item.productOrderId, item]));
+  const member = item => ({ orderItemId: byProduct.get(item.productOrderId).id, quantity: 1 });
+  const initial = await read(packingPath);
+  const packed = await read(packingPath, json('PATCH', { expectedVersion: initial.version, removeBoxIds: [], boxes: [
+    { items: combined.map(member) }, { items: [member(split)] }, { items: [member(split)] },
+  ] }));
+  const [shared, splitA, splitB] = packed.boxes;
+  assert.deepEqual(shared.items.map(item => item.orderItemId).sort(), combined.map(item => member(item).orderItemId).sort());
+  const alternate = { recipient: '가상 분리 수취인', phone: '010-0000-9032', baseAddress: '경기 성남시 가상길 32', detailedAddress: '302호' };
+  await read(`${packingPath}/boxes/${splitB.id}/delivery`, json('PATCH', { expectedVersion: packed.version, shipping: alternate }));
+
+  const extraOrder = byProduct.get(extra.productOrderId);
+  const toggle = (item, canceled) => read(`${base}/orders/${item.id}/cancellation`, json('PATCH', { expected: item.reviewVersion, canceled }));
+  const { order: canceled } = await toggle(extraOrder, true);
+  assert.equal(canceled.manuallyCanceled, true);
+  const dispatch = async (boxIds, orderItemIds, status) => read(base + '/dispatch', json('POST', {
+    expectedVersion: (await read(packingPath)).version, boxIds, orderItemIds,
+  }), status);
+  const boxIds = [shared.id, splitA.id, splitB.id];
+  await dispatch(boxIds, [extraOrder.id], 409);
+  const dispatched = await dispatch(boxIds, []);
+  const { date } = dispatched;
+  assert.equal(date, '2026-11-27');
+  assert.deepEqual([dispatched.registeredCount, dispatched.registeredQuantity], [3, 4]);
+  assert.equal((await read('/api/shipping/board?date=' + date)).registered.boxCount, 3);
+
+  const logen = async () => {
+    const [headers, ...rows] = workbookRows(await responseBytes(await request('/api/shipping/logen-export?date=' + date), 200));
+    return rows.map(row => Object.fromEntries(headers.map((header, index) => [header, row[index]])));
+  };
+  const exported = await logen();
+  assert.equal(exported.length, 3);
+  assert.ok(exported.every(row => row['체결번호'] !== extra.orderId));
+  const sharedRow = exported.find(row => row['체결번호'] === combined[0].orderId);
+  for (const item of combined) assert.ok(sharedRow['원상품명'].includes(item.productName));
+  const splitRows = exported.filter(row => row['체결번호'] === split.orderId);
+  assert.deepEqual(splitRows.map(row => [row['송화주'], row['전화번호'], row['주소']]), [
+    [recipient, phone, address], [alternate.recipient, alternate.phone, `${alternate.baseAddress} ${alternate.detailedAddress}`],
+  ]);
+  assert.equal(new Set(exported.map(row => row['주문번호'])).size, 3);
+  const label = (tracking, row) => [tracking, row['주문번호'], row['송화주'], row['전화번호'], row['주소']];
+  const [sharedNumber, laterNumber, firstNumber, restoredNumber] = ['45670000301', '45670000302', '45670000303', '45670000304'];
+  const issued = [label(firstNumber, splitRows[1]), label(sharedNumber, sharedRow), label(laterNumber, splitRows[0])];
+  const upload = (items, parcels) => uploadFiles(request, date, naverWorkbook(items), courierWorkbook(parcels));
+  const imported = await upload([...combined, split], issued);
+  assert.deepEqual(imported.items.filter(item => combined.some(product => product.productOrderId === item.productOrderId))
+    .map(item => [item.internalId, item.trackingNumber]), Array(2).fill([sharedRow['주문번호'], sharedNumber]));
+  const splitItem = imported.items.find(item => item.productOrderId === split.productOrderId);
+  assert.deepEqual(splitItem.physicalShipments.map(parcel => [parcel.internalId, parcel.trackingNumber, parcel.valid]).sort(),
+    [[splitRows[0]['주문번호'], laterNumber, true], [splitRows[1]['주문번호'], firstNumber, true]]);
+  assert.equal(splitItem.trackingNumber, firstNumber);
+  const rows = bytes => workbookRows(bytes).slice(1).map(row => [row[0], row[3]]);
+  const create = async view => responseBytes(await request(`/api/invoices/${view.run.id}/file`,
+    json('POST', { expectedVersion: view.viewVersion, mode: 'auto' })), 200);
+  const expected = [...combined.map(item => [item.productOrderId, sharedNumber]), [split.productOrderId, firstNumber]];
+  const archived = await create(imported);
+  assert.deepEqual(rows(archived), expected);
+
+  assert.equal((await toggle(canceled, false)).order.manuallyCanceled, false);
+  assert.equal((await dispatch([], [extraOrder.id])).registeredQuantity, 1);
+  const restored = await logen();
+  assert.equal(restored.length, 4);
+  const restoredRow = restored.find(row => row['체결번호'] === extra.orderId);
+  const complete = await upload(products, [...issued, label(restoredNumber, restoredRow)]);
+  assert.deepEqual(rows(await create(complete)), [...expected, [extra.productOrderId, restoredNumber]]);
+  assert.notEqual(complete.run.id, imported.run.id);
+  const preserved = await responseBytes(await request(`/api/invoices/${imported.run.id}/download`), 200);
+  assert.ok(preserved.equals(archived), '보관 엑셀의 바이트가 기존과 같아야 합니다.');
 });
 
 test('디스코드에서 27일 실패 작업을 다시 요청하면 보관 원본으로만 26건 엑셀을 만들고 기존 파일과 검토를 보존한다', async t => {

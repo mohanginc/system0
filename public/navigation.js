@@ -1,6 +1,6 @@
 (() => {
   const pages = [
-    ['/', '주문 수집'],
+    ['/', '주문 수집 및 관리'],
     ['/product-names', '상품명 정리'],
     ['/invoices.html', '송장 처리'],
     ['/shipping-board.html', '출고 보드'],

@@ -124,7 +124,7 @@ test('봇이 네이버 수집·검수·준비 수량 조회를 조합하고 웹�
   await session.web('/api/products', json('POST', { barcode, name: editedName }), 201);
   await session.web('/api/products/' + barcode + '/costs', json('POST', { effectiveDate: '2026-11-26', unitCostKrw: 6500 }), 201);
   const result = await session.run(`발주 전 주문을 가져와서 ${productOrderId}번은 ${editedName}으로 검수하고 ${barcode}에 연결해줘. 같은 바코드 준비 수량도 봐줘.`, [
-    tool('collect_naver_orders', { lookbackDays: null }),
+    tool('collect_naver_orders', { lookbackDays: null, workDate: null }),
     result => {
       assert.equal(result.collection.added, 1);
       assert.equal(result.rows[0].cleanedName, cleanedName);
@@ -159,7 +159,7 @@ test('봇이 쿠팡 첨부 엑셀을 웹과 같은 주문 수집에 저장합니
   ]);
   const attachment = session.addAttachment({ name: '쿠팡 배송목록.xlsx', buffer });
   const result = await session.run('첨부한 쿠팡 주문 엑셀을 가져와서 수집 목록에 넣어줘.', [
-    tool('import_coupang_orders', {}),
+    tool('import_coupang_orders', { workDate: null }),
     imported => {
       assert.equal(imported.collection.added, 1);
       assert.equal(imported.rows[0].provider, 'coupang');
@@ -175,6 +175,37 @@ test('봇이 쿠팡 첨부 엑셀을 웹과 같은 주문 수집에 저장합니
   const stored = await (await session.web('/api/order-intake')).json();
   assert.deepEqual(stored.orders.map(order => [order.provider, order.orderId, order.quantity]), [['coupang', '000100', 2]]);
   assert.ok(!JSON.stringify(session.modelRequests).includes('가상 배송지'));
+});
+
+test('봇은 지정 작업일에 넣고 수취인으로 저장 주문을 찾은 뒤 웹과 같은 배송 수정 API를 쓴다', async t => {
+  const workDate = '2026-11-27', productOrderId = '202611270100000093';
+  const recipient = '관리용 수취인', formerAddress = '서울 가상구 이전로 21', address = '서울 가상구 수정로 25';
+  const naver = { listNewOrders: async () => ({ orders: [{ productOrderId, orderId: '202611270100000099',
+    productName: original[1][0], optionName: original[1][1], quantity: 1, paidAt: '2026-11-26T09:00:00+09:00',
+    sourcePayload: { content: { productOrder: { shippingAddress: { name: recipient, tel1: '010-0000-7777', baseAddress: formerAddress } } } },
+  }] }) };
+  const session = await boot(t, { naver });
+  const filters = { workDate, recipient, orderNumber: productOrderId, offset: 0 };
+  const result = await session.run(`11월 27일 작업으로 네이버 주문을 불러와서 ${recipient} ${productOrderId}의 주소를 ${address}로 바꾸고 출고 보류해줘.`, [
+    tool('collect_naver_orders', { lookbackDays: null, workDate }),
+    () => tool('read_order_management', filters),
+    found => {
+      assert.equal(found.matchingRows, 1);
+      assert.equal(found.rows[0].workDate, workDate);
+      assert.ok(!JSON.stringify(found).includes(formerAddress));
+      return tool('save_order_delivery', { rowId: found.rows[0].id, recipient: null, phone: null, baseAddress: address,
+        detailedAddress: null, postalCode: null, memo: null, dispatchHeld: true });
+    },
+    saved => {
+      assert.equal(saved.dispatchHeld, true);
+      return '지정한 주문의 배송지를 수정하고 출고를 보류했습니다.';
+    },
+  ]);
+  const stored = await (await session.web('/api/order-intake?' + new URLSearchParams({ view: 'management', workDate, recipient }))).json();
+  assert.equal(stored.orders[0].shipping.baseAddress, address);
+  assert.equal(stored.orders[0].dispatchHeld, true);
+  assert.match(result.content, /주문 수정 저장/);
+  assert.ok(!JSON.stringify(session.modelRequests).includes(formerAddress));
 });
 
 test('봇은 로젠 등록 파일의 요약만 읽고 로그인해서 받는 링크를 보냅니다', async t => {
@@ -309,12 +340,24 @@ test('수집 주문 합포장과 낱개 분리는 봇과 웹에서 같은 상자
   assert.equal(split.summary.allocatedQuantity, 3);
   assert.equal(split.summary.unallocatedQuantity, 0);
   assert.deepEqual((await (await session.web('/api/order-intake')).json()).packing, split.summary);
+  const firstBoxes = split.boxes.filter(box => box.items.some(item => item.orderItemId === firstId));
+  const [deliveryBox, sibling] = firstBoxes;
+  const splitAddress = '서울 가상 상자 배송 주소';
   let dispatchedDate;
-  const dispatched = await session.run(`${first}의 상자 하나를 system0에 출고 등록하고 출고보드와 수집 잔여를 확인해줘.`, [
+  const dispatched = await session.run(`${first}의 상자 ${deliveryBox.id} 기본주소만 ${splitAddress}로 바꾸고 그 상자를 출고 등록해줘. 출고보드와 수집 잔여도 확인해줘.`, [
     tool('read_order_packing', { offset: 0, query: first }),
     result => {
       assert.equal(result.orders[0].productOrderId, first);
-      return tool('register_order_dispatch', { boxIds: [result.boxes[0].id], orderItemIds: [] });
+      assert.equal(result.boxes.find(box => box.id === deliveryBox.id).canEditDelivery, true);
+      return tool('save_box_delivery', { boxId: deliveryBox.id, recipient: null, phone: null, baseAddress: splitAddress,
+        detailedAddress: null, postalCode: null, memo: null });
+    },
+    async result => {
+      assert.equal(result.hasDeliveryOverride, true);
+      const after = await (await session.web(route)).json();
+      assert.equal(after.boxes.find(box => box.id === deliveryBox.id).shipping.baseAddress, splitAddress);
+      assert.deepEqual(after.boxes.find(box => box.id === sibling.id).shipping, sibling.shipping);
+      return tool('register_order_dispatch', { boxIds: [deliveryBox.id], orderItemIds: [] });
     },
     result => {
       assert.equal(result.registeredCount, 1);
@@ -332,6 +375,7 @@ test('수집 주문 합포장과 낱개 분리는 봇과 웹에서 같은 상자
       return '상자 1개를 출고 등록했고 잔여 1개가 있습니다.';
     },
   ]);
+  assert.match(dispatched.content, /상자 배송 정보 저장/);
   assert.match(dispatched.content, /출고 등록 · 상자 1개/);
   assert.ok(dispatched.content.includes('/shipping-board.html?date=' + dispatchedDate));
   const waiting = await (await session.web(route)).json();
@@ -341,6 +385,15 @@ test('수집 주문 합포장과 낱개 분리는 봇과 웹에서 같은 상자
   assert.equal(final.registeredCount, 2);
   assert.deepEqual((await (await session.web('/api/order-intake')).json()).orders, []);
   assert.equal((await (await session.web('/api/shipping/board?date=' + final.date)).json()).registered.boxCount, 3);
+  await session.run(`${first}의 출고 등록된 상자는 몇 개였어?`, [
+    tool('read_order_management', { workDate: null, recipient: null, orderNumber: first, offset: 0 }),
+    result => {
+      assert.deepEqual(result.rows[0].registeredBoxes.map(box => [box.number, box.quantity]).sort(),
+        [[deliveryBox.id, 1], [sibling.id, 1]].sort());
+      assert.ok(!JSON.stringify(result).includes(splitAddress));
+      return '등록된 분리배송 상자는 두 개입니다.';
+    },
+  ]);
   const page = await session.web('/order-packing.html');
   assert.match(await page.text(), /포장/);
 });

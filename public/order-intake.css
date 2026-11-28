@@ -1,7 +1,10 @@
 .intake-heading { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin: 0 0 18px; color: var(--navy); }
 .intake-heading h1 { margin: 0; font-size: 25px; letter-spacing: -.6px; }
 .intake-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
-.intake-range { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+.intake-range { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; font-size: 12px; }
+.intake-range input[type=date] { width: 143px; }
+.intake-search { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 0 20px 14px; }
+.intake-search input[type=search] { width: 152px; }
 .order-intake button.primary { background: var(--navy); border-color: var(--navy); }
 .order-intake button.primary:hover:not(:disabled) { background: #243155; }
 .intake-results-heading { flex-direction: row; align-items: center; flex-wrap: wrap; padding: 16px 20px; }
@@ -10,17 +13,34 @@
 #intake-summary { margin: 5px 0 0; font-size: 12px; color: #5f626b; line-height: 1.6; }
 #intake-summary:empty { display: none; }
 .intake-table { min-width: 0; }
-.intake-table th:first-child { width: 17%; }
-.intake-table th:nth-child(2) { width: 23%; }
-.intake-table th:nth-child(3) { width: 24%; }
-.intake-table th:nth-child(4) { width: 7%; }
-.intake-table th:nth-child(5) { width: 14%; }
-.intake-table th:nth-child(6) { width: 15%; }
-.intake-table td, .intake-table td:first-child { overflow-wrap: anywhere; text-align: left; padding: 12px 16px; }
+.intake-table th { padding: 10px 12px; }
+.intake-table th:first-child { width: 25%; }
+.intake-table th:nth-child(2) { width: 21%; }
+.intake-table th:nth-child(3) { width: 19%; }
+.intake-table th:nth-child(4) { width: 6%; }
+.intake-table th:nth-child(5) { width: 16%; }
+.intake-table th:nth-child(6) { width: 13%; }
+.intake-table td, .intake-table td:first-child { overflow-wrap: anywhere; text-align: left; padding: 9px 12px; line-height: 1.45; }
 .intake-table small { display: block; color: #5f626b; font-size: 11px; }
+.intake-order-meta, .intake-delivery-contact { display: flex; flex-wrap: wrap; align-items: baseline; gap: 2px 8px; }
+.intake-order-meta strong { font-size: 11px; color: var(--navy); }
+.intake-order-number, .intake-delivery-phone, .intake-quantity { font-variant-numeric: tabular-nums; }
+.intake-delivery-summary { margin-top: 3px; color: var(--navy); }
+.intake-delivery-summary .intake-delivery-address { color: #454855; font-size: 12px; word-break: keep-all; }
+.intake-original-product { color: #454855; }
+.intake-cleaned-product, .intake-quantity { color: var(--navy); font-weight: 600; }
+.intake-table .box-allocation { color: var(--navy); font-weight: 600; }
+.intake-table .pack-kind { display: block; width: fit-content; margin-bottom: 4px; padding: 2px 6px; border-radius: 4px; background: rgb(12 21 52 / 8%); color: var(--navy); font-size: 11px; font-weight: 700; line-height: 1.4; }
+.intake-table .pack-kind-split { background: rgb(232 77 133 / 15%); }
 .intake-table .destination-attention { color: #8c293e; }
-.intake-table .status { white-space: normal; }
-.intake-table .intake-edit { margin-top: 5px; min-height: 40px; }
+.intake-statuses { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; }
+.intake-table .status { white-space: normal; padding: 4px 8px; }
+.intake-table .status.dispatched { background: #dce5fa; color: var(--navy); }
+.intake-table .status.closed { background: var(--soft); color: #454855; }
+.intake-table .status.manual-canceled { background: #f9e2e8; color: #8c293e; }
+.intake-order-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 4px; margin-top: 4px; }
+.intake-table .intake-edit { min-height: 40px; padding-inline: 9px; }
+.intake-table .intake-box-edit { margin-top: 4px; }
 .intake-empty { padding: 22px 20px; margin: 0; border-top: 1px solid var(--border); color: #5f626b; font-size: 13px; }
 .intake-review { width: min(500px, calc(100% - 32px)); padding: 22px; border: 1px solid var(--border); border-radius: 12px; }
 .intake-review::backdrop { background: rgb(12 21 52 / 45%); }
@@ -29,11 +49,27 @@
 .intake-review .intake-actions { justify-content: flex-end; margin-top: 16px; }
 .intake-review p { font-size: 12px; line-height: 1.65; overflow-wrap: anywhere; }
 .review-original { color: #5f626b; }
-#review-error { color: #8c293e; }
+#review-error, #delivery-error { color: #8c293e; }
+.intake-delivery-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.intake-delivery-fields .intake-field { margin: 0; }
+.intake-field-wide { grid-column: 1 / -1; }
+.intake-hold { display: flex; align-items: center; gap: 6px; width: fit-content; margin-top: 14px; font-size: 12px; }
+.intake-table .pack-group { --pack-group-border: var(--navy); }
+.intake-table .pack-group-split { --pack-group-border: var(--pink); }
+@media (min-width: 721px) {
+  .intake-table .pack-group > td:first-child { border-left: 2px solid var(--pack-group-border); }
+  .intake-table .pack-group > td:last-child { border-right: 2px solid var(--pack-group-border); }
+  .intake-table .pack-group-start > td { border-top: 2px solid var(--pack-group-border); }
+  .intake-table .pack-group-end > td { border-bottom: 2px solid var(--pack-group-border); }
+}
 @media (max-width: 720px) {
   .intake-table thead { position: absolute; width: 1px; height: 1px; clip-path: inset(50%); overflow: hidden; }
   .intake-table, .intake-table tbody { display: block; }
   .intake-table tr { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); padding: 8px; border-top: 1px solid var(--border); }
+  .intake-table tr.pack-group { border-inline: 2px solid var(--pack-group-border); }
+  .intake-table tr.pack-group-start { border-top: 2px solid var(--pack-group-border); }
+  .intake-table tr.pack-group-end { border-bottom: 2px solid var(--pack-group-border); }
   .intake-table td, .intake-table td:first-child { border: 0; padding: 6px; min-width: 0; }
+  .intake-table td:first-child { grid-column: 1 / -1; }
   .intake-table td::before { content: attr(data-label); display: block; color: #545c70; font-size: 10px; margin-bottom: 3px; }
 }

@@ -17,8 +17,9 @@ import { logenExport } from './lib/logen-export.mjs';
 import { createNaverClient } from './lib/naver.mjs';
 import { previewShippingBoard } from './lib/shipping-preview.mjs';
 import { productCatalog, addProduct, linkProductName, productCostHistory, addProductCost } from './lib/products.mjs';
-import { getOrderIntake, collectOrderIntake, normalizeOrderIntake, reviseOrderIntake, importCoupangOrders } from './lib/order-intake.mjs';
-import { getOrderPacking, reviseOrderPacking, registerOrderDispatch } from './lib/order-packing.mjs';
+import { getOrderIntake, getOrderManagement, collectOrderIntake, normalizeOrderIntake, reviseOrderIntake, reviseOrderDelivery,
+  reviseManualCancellation, importCoupangOrders } from './lib/order-intake.mjs';
+import { getOrderPacking, reviseOrderPacking, reviseBoxDelivery, registerOrderDispatch } from './lib/order-packing.mjs';
 import { CARRIERS, unlockNaverFiles, classifyInvoiceFiles, prepareInvoiceFile, importInvoiceFiles, savedInvoiceInputs, listInvoiceRuns, listInvoiceDrafts, reviseInvoiceItems,
   exportInvoices, downloadInvoices, latestInvoice, refreshInvoiceStatus, refreshOutsideInvoiceStatus,
   invoiceView, invoiceSourceView, invoiceDateRunIds, checkInvoiceDate, applyInvoiceTrackingReview, confirmInvoiceTracking, lookupInvoiceOrder } from './lib/invoices.mjs';
@@ -118,6 +119,8 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
     };
   const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024, files: 100, fields: 0 },
     fileFilter: excelFileFilter });
+  const coupangUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024, files: 1, fields: 1, fieldSize: 40 },
+    fileFilter: excelFileFilter }).single('file');
   const invoiceUpload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 10 * 1024 * 1024, files: 100, fields: 3 },
     fileFilter: excelFileFilter }).fields([{ name: 'naverFiles', maxCount: 50 }, { name: 'courierFiles', maxCount: 50 }, { name: 'files', maxCount: 50 }]);
   const idFrom = request => {
@@ -378,15 +381,25 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
     finally { previewRunning = false; }
   });
   app.use('/api/order-intake', (_request, response, next) => { response.set('Cache-Control', 'no-store'); next(); });
-  app.get('/api/order-intake', (_request, response) => response.json({
-    ...getOrderIntake(db), packing: getOrderPacking(db).summary, running: intakeRunning,
-  }));
+  app.get('/api/order-intake', (request, response) => {
+    const { view, workDate, recipient } = request.query;
+    const orders = view === 'management' ? getOrderManagement(db, { workDate, recipient }) : getOrderIntake(db);
+    response.json({ ...orders, packing: getOrderPacking(db).summary, running: intakeRunning });
+  });
   app.get('/api/order-intake/packing', (_request, response) => response.json(getOrderPacking(db)));
   app.patch('/api/order-intake/packing', (request, response) => {
     if (intakeRunning) return response.status(409).json({ error: '주문 수집·상품명 정리가 진행 중입니다.' });
     try { response.json(reviseOrderPacking(db, request.body || {})); }
     catch (error) {
       if (error.status === 409) response.status(409).json({ error: error.message });
+      else throw error;
+    }
+  });
+  app.patch('/api/order-intake/packing/boxes/:id/delivery', (request, response) => {
+    if (intakeRunning) return response.status(409).json({ error: '주문 수집·상품명 정리가 진행 중입니다.' });
+    try { response.json(reviseBoxDelivery(db, idFrom(request), request.body || {})); }
+    catch (error) {
+      if (error.status === 409 || error.status === 404) response.status(error.status).json({ error: error.message });
       else throw error;
     }
   });
@@ -398,9 +411,11 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
     finally { intakeRunning = false; }
   };
   app.post('/api/order-intake/collect', runIntake(request => collectOrderIntake(db,
-    { ...intakeOptions, lookbackDays: request.body?.lookbackDays })));
-  app.post('/api/order-intake/coupang', upload.single('file'), runIntake(request => importCoupangOrders(db,
-    { client: ai, model, file: request.file })));
+    { ...intakeOptions, lookbackDays: request.body?.lookbackDays, workDate: request.body?.workDate })));
+  app.post('/api/order-intake/coupang', coupangUpload, runIntake(request => {
+    if (Object.keys(request.body || {}).some(key => key !== 'workDate')) throw new Error('수집 작업일을 확인해 주세요.');
+    return importCoupangOrders(db, { client: ai, model, file: request.file, workDate: request.body?.workDate });
+  }));
   app.post('/api/order-intake/normalize', runIntake(() => normalizeOrderIntake(db, intakeOptions)));
   app.post('/api/order-intake/dispatch', (request, response) => {
     if (intakeRunning) return response.status(409).json({ error: '주문 수집·상품명 정리가 진행 중입니다.' });
@@ -413,6 +428,22 @@ export function createApp({ databasePath = process.env.DATABASE_PATH || defaultD
   app.patch('/api/order-intake/orders/:id', (request, response) => {
     if (intakeRunning) return response.status(409).json({ error: '주문 수집·상품명 정리가 진행 중입니다.' });
     try { response.json(reviseOrderIntake(db, idFrom(request), request.body || {})); }
+    catch (error) {
+      if (error.status === 409 || error.status === 404) response.status(error.status).json({ error: error.message });
+      else throw error;
+    }
+  });
+  app.patch('/api/order-intake/orders/:id/delivery', (request, response) => {
+    if (intakeRunning) return response.status(409).json({ error: '주문 수집·상품명 정리가 진행 중입니다.' });
+    try { response.json({ order: reviseOrderDelivery(db, idFrom(request), request.body || {}) }); }
+    catch (error) {
+      if (error.status === 409 || error.status === 404) response.status(error.status).json({ error: error.message });
+      else throw error;
+    }
+  });
+  app.patch('/api/order-intake/orders/:id/cancellation', (request, response) => {
+    if (intakeRunning) return response.status(409).json({ error: '주문 수집·상품명 정리가 진행 중입니다.' });
+    try { response.json({ order: reviseManualCancellation(db, idFrom(request), request.body || {}) }); }
     catch (error) {
       if (error.status === 409 || error.status === 404) response.status(error.status).json({ error: error.message });
       else throw error;

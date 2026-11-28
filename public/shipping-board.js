@@ -151,7 +151,7 @@ function renderGroup(group, open, view = 'confirmed') {
     for (const value of data) row.insertCell().append(canceled ? element('s', value) : value);
     if (canceled || hold) {
       row.classList.add(canceled ? 'is-canceled' : 'is-hold');
-      row.cells[0].append(element('small', canceled ? '취소 완료' : '보류', 'dispatch-status'));
+      row.cells[0].append(element('small', canceled ? shipment.dispatchReason || '취소 완료' : '보류', 'dispatch-status'));
       if (hold && shipment.dispatchReason) row.cells[0].append(element('small', shipment.dispatchReason, 'dispatch-reason'));
     }
     if (preview) {

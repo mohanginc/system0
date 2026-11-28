@@ -14,6 +14,8 @@
 .pack-box-meta { display: block; margin-top: 3px; color: #545c70; font-size: 11px; }
 .pack-actions { display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); }
 .pack-actions p { margin-right: auto; }
+#pack-feedback { flex-basis: 100%; margin: 0; color: var(--navy); font-size: 12px; line-height: 1.65; }
+#pack-feedback.error { color: #8c293e; }
 .pack-box.is-released { background: var(--soft); }
 .pack-box button { flex: 0 0 auto; }
 .pack-box-items { padding-inline-start: 17px; margin: 6px 0 0; }
